@@ -12,6 +12,7 @@ import {
 } from './types';
 import { Icons } from './components/Icons';
 import Quiz from './components/Quiz';
+import { AuthView } from './components/AuthView';
 import { 
   getUserProgress, 
   saveUserProgress, 
@@ -36,27 +37,18 @@ function App() {
   // Result State
   const [lastScore, setLastScore] = useState<{score: number, passed: boolean} | null>(null);
 
-  // Auth State
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [isSignUp, setIsSignUp] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const [authLoading, setAuthLoading] = useState(false);
-
   // Initialize Auth Listener
   useEffect(() => {
+    // Check for initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        handleUserSession(session.user);
+      }
+    });
+
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
         if (session?.user) {
-            setUser({ username: session.user.email?.split('@')[0] || 'Student', email: session.user.email! });
-            
-            // Only fetch progress if we don't have it or if the user changed
-            // We set loading state to avoid flicker
-            setLoadingProgress(true);
-            const data = await getUserProgress(session.user.id);
-            setProgress(data);
-            setLoadingProgress(false);
-            
-            setView((prev) => prev === ViewState.AUTH ? ViewState.DASHBOARD : prev);
+            handleUserSession(session.user);
         } else {
             setUser(null);
             setView(ViewState.AUTH);
@@ -68,40 +60,23 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auth Handlers
-  const handleAuth = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setAuthLoading(true);
-    setAuthError(null);
-
-    try {
-        if (isSignUp) {
-            const { error } = await supabase.auth.signUp({
-                email: authEmail,
-                password: authPassword,
-            });
-            if (error) throw error;
-            setAuthError("Account created! Please check your email for the confirmation link.");
-        } else {
-            const { error } = await supabase.auth.signInWithPassword({
-                email: authEmail,
-                password: authPassword,
-            });
-            if (error) throw error;
-            // Successful login will trigger onAuthStateChange
-        }
-    } catch (err: any) {
-        console.error("Auth error:", err);
-        setAuthError(err.message || "Authentication failed. Please try again.");
-    } finally {
-        setAuthLoading(false);
-    }
+  const handleUserSession = async (supabaseUser: any) => {
+    setUser({ username: supabaseUser.email?.split('@')[0] || 'Student', email: supabaseUser.email! });
+    
+    // Only fetch progress if we don't have it or if the user changed
+    // We set loading state to avoid flicker
+    setLoadingProgress(true);
+    const data = await getUserProgress(supabaseUser.id);
+    setProgress(data);
+    setLoadingProgress(false);
+    
+    // Move to dashboard if currently on Auth screen
+    setView((prev) => prev === ViewState.AUTH ? ViewState.DASHBOARD : prev);
   };
 
   const handleLogout = async () => {
-      setAuthEmail('');
-      setAuthPassword('');
       await supabase.auth.signOut();
+      setView(ViewState.AUTH);
   }
 
   // Navigation Handlers
@@ -176,71 +151,6 @@ function App() {
     setSelectedMode(null);
     setSelectedPart(null);
   }
-
-  // --- Render Helpers (Not Components) to prevent focus loss ---
-
-  const renderAuth = () => (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
-      <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 transition-all hover:shadow-2xl duration-500">
-        <div className="text-center mb-8">
-            <h1 className="text-3xl font-bold text-gray-800 mb-2">AceAcademia</h1>
-            <p className="text-gray-500">{isSignUp ? 'Create an account to begin' : 'Welcome back, please login'}</p>
-        </div>
-        
-        {authError && (
-            <div className={`p-3 rounded-lg mb-4 text-sm ${authError.includes('check your email') ? 'bg-green-50 text-green-600' : 'bg-red-50 text-red-600'}`}>
-                {authError}
-            </div>
-        )}
-
-        <form onSubmit={handleAuth} className="space-y-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
-            <input 
-                type="email" 
-                required 
-                value={authEmail}
-                onChange={(e) => setAuthEmail(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
-                placeholder="you@example.com" 
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
-            <input 
-                type="password" 
-                required 
-                value={authPassword}
-                onChange={(e) => setAuthPassword(e.target.value)}
-                className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all" 
-                placeholder="••••••••" 
-                minLength={6}
-            />
-          </div>
-          <button 
-            type="submit" 
-            disabled={authLoading}
-            className={`w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-200 transform hover:-translate-y-0.5 ${authLoading ? 'opacity-70 cursor-wait' : ''}`}
-          >
-            {authLoading ? 'Processing...' : (isSignUp ? 'Sign Up' : 'Sign In')}
-          </button>
-        </form>
-
-        <div className="text-center mt-6 pt-4 border-t border-gray-100">
-            <p className="text-sm text-gray-500">
-                {isSignUp ? 'Already have an account?' : "Don't have an account?"}
-                <button 
-                    onClick={() => { setIsSignUp(!isSignUp); setAuthError(null); }}
-                    className="text-blue-600 font-semibold ml-1 hover:underline focus:outline-none"
-                    type="button"
-                >
-                    {isSignUp ? 'Log in' : 'Sign up'}
-                </button>
-            </p>
-        </div>
-      </div>
-    </div>
-  );
 
   const renderDashboard = () => (
     <div className="p-6 max-w-6xl mx-auto">
@@ -448,7 +358,7 @@ function App() {
   };
 
   // Main Render Switch
-  if (view === ViewState.AUTH) return renderAuth();
+  if (view === ViewState.AUTH) return <AuthView />;
   if (view === ViewState.DASHBOARD) return renderDashboard();
   if (view === ViewState.YEAR_SELECT) return renderYearSelect();
   if (view === ViewState.MODE_SELECT) return renderModeSelect();

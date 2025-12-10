@@ -16,7 +16,7 @@ import { Icons } from './components/Icons';
 import Quiz from './components/Quiz';
 import { Dashboard } from './components/Dashboard';
 import { AuthView } from './components/AuthView';
-import { AdminUpload } from './components/AdminUpload';
+import { AdminDashboard } from './components/AdminDashboard';
 import { ProfileDashboard } from './components/ProfileDashboard';
 import { Leaderboard } from './components/Leaderboard';
 import { 
@@ -569,7 +569,7 @@ function App() {
             {view === ViewState.RESULT && renderResult()}
             
             {view === ViewState.ADMIN && (
-                <AdminUpload onBack={() => setView(ViewState.DASHBOARD)} />
+                <AdminDashboard onBack={() => setView(ViewState.DASHBOARD)} />
             )}
 
             {view === ViewState.PROFILE && user && (

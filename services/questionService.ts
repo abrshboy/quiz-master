@@ -16,13 +16,21 @@ export const fetchQuestions = async (
   part?: number
 ): Promise<Question[]> => {
   const cacheKey = getCacheKey(courseId, year, mode, part);
+  const isOffline = !navigator.onLine;
 
-  // 1. Try Cache First for Speed
+  // 1. FAST PATH: Check Cache
   try {
     const cachedRaw = localStorage.getItem(cacheKey);
     if (cachedRaw) {
       const { data, timestamp } = JSON.parse(cachedRaw);
-      // Check if valid (optional expiry check, currently set to 7 days)
+      
+      // If offline, return cache immediately regardless of expiry
+      if (isOffline) {
+        console.log(`[Offline] Serving cached questions for ${cacheKey}`);
+        return data as Question[];
+      }
+
+      // If online, check expiry (Speed Optimization)
       if (Date.now() - timestamp < CACHE_EXPIRY_MS) {
         console.log(`[Cache Hit] Serving questions for ${cacheKey}`);
         return data as Question[];
@@ -30,10 +38,15 @@ export const fetchQuestions = async (
     }
   } catch (e) {
     console.warn("Error reading from cache", e);
-    // Continue to network
   }
 
-  // 2. Network Fetch if Cache Miss or Expired
+  // If we are offline but cache was missed/error, we can't do anything
+  if (isOffline) {
+      console.warn("Offline and no cache available.");
+      return [];
+  }
+
+  // 2. NETWORK PATH: Fetch from Supabase
   try {
     let query = supabase
       .from('questions')
@@ -48,10 +61,7 @@ export const fetchQuestions = async (
 
     const { data, error } = await query;
 
-    if (error) {
-      console.error('Error fetching questions:', error);
-      throw error;
-    }
+    if (error) throw error;
 
     if (!data || data.length === 0) {
       return [];
@@ -75,24 +85,24 @@ export const fetchQuestions = async (
   } catch (err) {
     console.error('Network request failed, trying fallback cache...', err);
     
-    // 4. Offline Fallback: Try to load expired cache if available
-    const cachedRaw = localStorage.getItem(cacheKey);
-    if (cachedRaw) {
-       const { data } = JSON.parse(cachedRaw);
-       return data as Question[];
-    }
+    // 4. Fallback: Try to load even expired cache if network failed
+    try {
+        const cachedRaw = localStorage.getItem(cacheKey);
+        if (cachedRaw) {
+            const { data } = JSON.parse(cachedRaw);
+            return data as Question[];
+        }
+    } catch (e) { /* ignore */ }
 
-    // If both fail
-    console.error('No cached data available for offline mode.');
     return [];
   }
 };
 
-// Fetches 10 random questions from the database (simulated randomness via client-side shuffle for now)
+// Fetches 10 random questions from the database
 export const fetchDailyChallengeQuestions = async (courseId: string): Promise<Question[]> => {
     const cacheKey = `${CACHE_PREFIX}daily_${courseId}_${new Date().toDateString()}`;
 
-    // Check Daily Cache (only valid for the current day)
+    // Check Daily Cache
     try {
         const cachedRaw = localStorage.getItem(cacheKey);
         if (cachedRaw) {
@@ -100,6 +110,8 @@ export const fetchDailyChallengeQuestions = async (courseId: string): Promise<Qu
              return data;
         }
     } catch (e) { console.warn(e); }
+
+    if (!navigator.onLine) return [];
 
     try {
         // Fetch a broad set of questions
@@ -114,14 +126,9 @@ export const fetchDailyChallengeQuestions = async (courseId: string): Promise<Qu
         if (!data || data.length === 0) return [];
 
         const allQuestions = data.map((row: any) => row.content as Question);
-        
-        // Shuffle array
         const shuffled = allQuestions.sort(() => 0.5 - Math.random());
-        
-        // Return first 10
         const result = shuffled.slice(0, 10);
 
-        // Cache for the day
         localStorage.setItem(cacheKey, JSON.stringify({
             timestamp: Date.now(),
             data: result
@@ -130,7 +137,6 @@ export const fetchDailyChallengeQuestions = async (courseId: string): Promise<Qu
         return result;
     } catch (err) {
         console.error("Error fetching daily challenge:", err);
-         // Fallback to any cached data if completely offline
          const fallbackKey = Object.keys(localStorage).find(k => k.startsWith(`${CACHE_PREFIX}${courseId}`));
          if (fallbackKey) {
              const cached = localStorage.getItem(fallbackKey);

@@ -1,5 +1,5 @@
 
-import { UserProgress, SavedSession, Activity, LeaderboardEntry } from '../types';
+import { UserProgress, SavedSession, Activity } from '../types';
 import { supabase } from './supabaseClient';
 
 export const initialProgress: UserProgress = {
@@ -21,75 +21,84 @@ export const initialProgress: UserProgress = {
 const SYNC_KEY = 'ace_progress_sync_pending';
 const LOCAL_PROGRESS_KEY = 'ace_user_progress_local';
 
-export const getUserProgress = async (userId: string): Promise<UserProgress> => {
-  try {
-    // 1. Check for Pending Sync
+// Setup listener for auto-sync when back online
+if (typeof window !== 'undefined') {
+    window.addEventListener('online', () => {
+        console.log("Device online. Attempting to sync pending progress...");
+        syncPendingData();
+    });
+}
+
+const syncPendingData = async () => {
     const pendingSync = localStorage.getItem(SYNC_KEY);
     if (pendingSync) {
-        console.log("Found pending progress sync, attempting to upload...");
         try {
             const parsed = JSON.parse(pendingSync);
-            // Only sync if it matches current user
-            if (parsed.userId === userId) {
-                const { error } = await supabase
-                    .from('user_progress')
-                    .upsert({ 
-                        user_id: userId, 
-                        data: parsed.progress,
-                        updated_at: new Date().toISOString()
-                    }, { onConflict: 'user_id' });
-                
-                if (!error) {
-                    console.log("Sync successful, clearing pending state.");
-                    localStorage.removeItem(SYNC_KEY);
-                }
+            const { error } = await supabase
+                .from('user_progress')
+                .upsert({ 
+                    user_id: parsed.userId, 
+                    data: parsed.progress,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_id' });
+            
+            if (!error) {
+                console.log("Sync successful. Clearing pending queue.");
+                localStorage.removeItem(SYNC_KEY);
             }
         } catch (e) {
-            console.error("Sync failed", e);
+            console.error("Background sync failed", e);
+        }
+    }
+};
+
+export const getUserProgress = async (userId: string): Promise<UserProgress> => {
+  try {
+    // Attempt sync first if online
+    if (navigator.onLine) {
+        await syncPendingData();
+    }
+
+    // 1. Try Local Storage (Fastest)
+    const local = localStorage.getItem(`${LOCAL_PROGRESS_KEY}_${userId}`);
+    
+    // 2. Fetch from Supabase
+    if (navigator.onLine) {
+        const { data, error } = await supabase
+          .from('user_progress')
+          .select('data')
+          .eq('user_id', userId)
+          .single();
+
+        if (data) {
+          const progress = data.data as UserProgress;
+          const merged = {
+              ...initialProgress,
+              ...progress,
+              streak: progress.streak || 0,
+              totalXp: progress.totalXp || 0,
+              recentActivities: progress.recentActivities || [],
+              dailyChallengeLastCompleted: progress.dailyChallengeLastCompleted || null,
+              department: progress.department || 'General',
+              highestExamScore: progress.highestExamScore || 0,
+              fastestExamTime: progress.fastestExamTime || 99999
+          };
+          
+          // Update local backup with fresh data
+          localStorage.setItem(`${LOCAL_PROGRESS_KEY}_${userId}`, JSON.stringify(merged));
+          return merged;
         }
     }
 
-    // 2. Fetch from Supabase
-    const { data, error } = await supabase
-      .from('user_progress')
-      .select('data')
-      .eq('user_id', userId)
-      .single();
-
-    if (error) {
-      if (error.code === 'PGRST116') return initialProgress;
-      // If network error, try to load from local storage
-      if (error.message && (error.message.includes('fetch') || error.message.includes('network'))) {
-          console.warn("Network error fetching progress, falling back to local.");
-          const local = localStorage.getItem(`${LOCAL_PROGRESS_KEY}_${userId}`);
-          if (local) return JSON.parse(local);
-      }
-      return initialProgress;
-    }
-
-    if (data) {
-      const progress = data.data as UserProgress;
-      const merged = {
-          ...initialProgress,
-          ...progress,
-          streak: progress.streak || 0,
-          totalXp: progress.totalXp || 0,
-          recentActivities: progress.recentActivities || [],
-          dailyChallengeLastCompleted: progress.dailyChallengeLastCompleted || null,
-          department: progress.department || 'General',
-          highestExamScore: progress.highestExamScore || 0,
-          fastestExamTime: progress.fastestExamTime || 99999
-      };
-      
-      // Update local backup
-      localStorage.setItem(`${LOCAL_PROGRESS_KEY}_${userId}`, JSON.stringify(merged));
-      return merged;
+    // 3. Fallback to Local if offline or DB empty/error
+    if (local) {
+        console.log("Loading progress from local cache.");
+        return JSON.parse(local);
     }
 
     return initialProgress;
   } catch (err) {
     console.error('Unexpected error fetching progress:', err);
-    // Fallback
     const local = localStorage.getItem(`${LOCAL_PROGRESS_KEY}_${userId}`);
     if (local) return JSON.parse(local);
     return initialProgress;
@@ -153,8 +162,9 @@ export const syncLeaderboardStats = async (
     progress: UserProgress,
     newActivity?: { type: string; xp: number }
 ) => {
+    if (!navigator.onLine) return; // Skip if offline
+    
     try {
-        // 1. Insert Activity Log
         if (newActivity) {
             await supabase.from('activity_log').insert({
                 user_id: userId,
@@ -164,7 +174,6 @@ export const syncLeaderboardStats = async (
             });
         }
 
-        // 2. Upsert Leaderboard Stats
         const totalPracticeParts = Object.values(progress.unlockedPracticeParts).reduce((a, b) => a + (b - 1), 0);
 
         const { error } = await supabase.from('leaderboard').upsert({
@@ -180,7 +189,7 @@ export const syncLeaderboardStats = async (
 
         if (error) console.error("Failed to sync leaderboard:", error);
     } catch (e) {
-        console.warn("Offline: Could not sync leaderboard stats.");
+        console.warn("Could not sync leaderboard stats.", e);
     }
 };
 
@@ -196,37 +205,41 @@ export const isDailyChallengeAvailable = (progress: UserProgress): boolean => {
 };
 
 export const saveUserProgress = async (userId: string, progress: UserProgress) => {
-  // Always update local backup immediately for UI responsiveness
+  // 1. Update local backup immediately (synchronous UI update)
   localStorage.setItem(`${LOCAL_PROGRESS_KEY}_${userId}`, JSON.stringify(progress));
 
-  try {
-    const { error } = await supabase
-      .from('user_progress')
-      .upsert({ 
-        user_id: userId, 
-        data: progress,
-        updated_at: new Date().toISOString()
-      }, { onConflict: 'user_id' });
+  // 2. Try Remote Save
+  if (navigator.onLine) {
+      try {
+        const { error } = await supabase
+          .from('user_progress')
+          .upsert({ 
+            user_id: userId, 
+            data: progress,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id' });
 
-    if (error) {
-        console.warn('Error saving progress remotely:', error);
-        throw error;
-    } else {
-        // If save success, remove any pending sync
-        const pending = localStorage.getItem(SYNC_KEY);
-        if (pending) {
-            const p = JSON.parse(pending);
-            if (p.userId === userId) localStorage.removeItem(SYNC_KEY);
+        if (!error) {
+            // Remove pending sync if successful
+            const pending = localStorage.getItem(SYNC_KEY);
+            if (pending) {
+                const p = JSON.parse(pending);
+                if (p.userId === userId) localStorage.removeItem(SYNC_KEY);
+            }
+            return;
         }
-    }
-  } catch (err) {
-    console.error('Offline or Error: Saving progress locally for later sync.');
-    localStorage.setItem(SYNC_KEY, JSON.stringify({
-        userId,
-        progress,
-        timestamp: Date.now()
-    }));
+      } catch (err) {
+          console.warn('Network error saving progress.');
+      }
   }
+
+  // 3. Queue for later if offline or error
+  console.log('Queuing progress for sync...');
+  localStorage.setItem(SYNC_KEY, JSON.stringify({
+      userId,
+      progress,
+      timestamp: Date.now()
+  }));
 };
 
 export const resetUserProgress = async (userId: string): Promise<void> => {

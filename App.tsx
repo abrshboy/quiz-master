@@ -37,7 +37,7 @@ function App() {
   const [view, setView] = useState<ViewState>(ViewState.AUTH);
   const [user, setUser] = useState<User | null>(null);
   const [progress, setProgress] = useState<UserProgress>(initialProgress);
-  const [loadingProgress, setLoadingProgress] = useState(true); // Start true to prevent auth flicker
+  const [loadingProgress, setLoadingProgress] = useState(true);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [isAppReady, setIsAppReady] = useState(false);
   
@@ -49,20 +49,19 @@ function App() {
   
   // Result State
   const [lastScore, setLastScore] = useState<{score: number, passed: boolean} | null>(null);
-  // Track time for leaderboard
   const [quizStartTime, setQuizStartTime] = useState<number>(0);
 
+  // Consolidated Login Logic
   const handleUserLogin = async (authUser: any) => {
     if (!authUser) return;
 
-    // Normalize User Data
     const newUser: User = {
       id: authUser.id,
       email: authUser.email || '',
       username: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'Student',
     };
     
-    // Set user state immediately so UI can react (e.g., showing a different loading message)
+    // Set user immediately to prevent AuthView from lingering if logic takes time
     setUser(newUser);
     setLoadingProgress(true);
 
@@ -70,18 +69,14 @@ function App() {
         let loadedProgress = await getUserProgress(newUser.id);
         loadedProgress = updateStreak(loadedProgress);
         
-        // Sync streak update immediately
-        // Note: saveUserProgress now handles offline sync internally
         await saveUserProgress(newUser.id, loadedProgress);
         await syncLeaderboardStats(newUser.id, newUser.username, loadedProgress);
         
         setProgress(loadedProgress);
-        
-        // Only switch view if we are still on the AUTH screen
-        setView(current => current === ViewState.AUTH ? ViewState.DASHBOARD : current);
+        setView(ViewState.DASHBOARD);
     } catch (e) {
         console.error("Failed to load progress", e);
-        // Fallback to initial progress so app doesn't crash
+        // Fallback safety to prevent white screen
         setProgress(initialProgress);
         setView(ViewState.DASHBOARD);
     } finally {
@@ -89,13 +84,11 @@ function App() {
     }
   };
 
-  // Initialize Auth Listener
   useEffect(() => {
     let mounted = true;
 
     const initAuth = async () => {
         try {
-            // Check for existing session first
             const { data: { session } } = await supabase.auth.getSession();
             if (session?.user && mounted) {
                 await handleUserLogin(session.user);
@@ -118,11 +111,14 @@ function App() {
       console.log(`Auth Event: ${event}`);
 
       if (event === 'SIGNED_IN' && session?.user) {
-         // Avoid double-calling logic if session check already handled it
-         // But ensuring we catch fresh sign-ins
-         if (!user || user.id !== session.user.id) {
-             await handleUserLogin(session.user);
-         }
+         // Using functional update to check if we really need to re-login
+         setUser(currentUser => {
+             if (currentUser?.id !== session.user.id) {
+                 // Trigger async login but don't await it inside the setter
+                 handleUserLogin(session.user);
+             }
+             return currentUser;
+         });
       } else if (event === 'SIGNED_OUT') {
         setUser(null);
         setView(ViewState.AUTH);
@@ -135,7 +131,7 @@ function App() {
         mounted = false;
         subscription.unsubscribe();
     };
-  }, []); // Run once on mount
+  }, []);
 
   const handleUpdateProgress = async (newProgress: UserProgress) => {
     setProgress(newProgress);
@@ -163,7 +159,7 @@ function App() {
 
   const handleModeSelect = (mode: QuizMode) => {
     setSelectedMode(mode);
-    setQuizStartTime(Date.now()); // Start timing
+    setQuizStartTime(Date.now());
     if (mode === QuizMode.PRACTICE) {
       setView(ViewState.PRACTICE_LIST);
     } else {
@@ -176,7 +172,7 @@ function App() {
       const maxPart = progress.unlockedPracticeParts[selectedYear] || 1;
       if (part <= maxPart) {
         setSelectedPart(part);
-        setQuizStartTime(Date.now()); // Start timing for practice part
+        setQuizStartTime(Date.now());
         setView(ViewState.QUIZ);
       }
     }
@@ -207,13 +203,11 @@ function App() {
         newProgress = updateStreak(newProgress); 
 
     } else if (selectedMode === QuizMode.EXAM) {
-        // High score logic for Leaderboard
         const currentHighScore = newProgress.highestExamScore || 0;
         if (score > currentHighScore) {
             newProgress.highestExamScore = score;
         }
 
-        // Speed logic for Leaderboard
         const currentBestTime = newProgress.fastestExamTime || 99999;
         if (passed && timeTakenSeconds < currentBestTime) {
             newProgress.fastestExamTime = timeTakenSeconds;
@@ -246,10 +240,8 @@ function App() {
         }
     }
 
-    // Log local activity
     newProgress = logActivity(newProgress, activityType, activityDesc, xpGained);
 
-    // Save and Sync to Leaderboard
     await handleUpdateProgress(newProgress);
     if (user) {
         await syncLeaderboardStats(user.id, user.username, newProgress, { type: activityType, xp: xpGained });
@@ -269,10 +261,7 @@ function App() {
   const handleLogout = async () => {
     setLoadingProgress(true);
     await supabase.auth.signOut();
-    // State clearing handled by onAuthStateChange(SIGNED_OUT)
   };
-
-  // --- Render Helpers ---
 
   const renderYearSelect = () => (
     <div className="max-w-3xl mx-auto animate-fade-in">
@@ -469,8 +458,9 @@ function App() {
     );
   }
 
-  if (view === ViewState.AUTH || !user) {
-    return <AuthView />;
+  // Ensure View is correct relative to user state
+  if ((view === ViewState.AUTH || !user)) {
+      return <AuthView />;
   }
 
   // Quiz View is Full Screen

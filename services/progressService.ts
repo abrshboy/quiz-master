@@ -18,8 +18,38 @@ export const initialProgress: UserProgress = {
   fastestExamTime: 99999
 };
 
+const SYNC_KEY = 'ace_progress_sync_pending';
+const LOCAL_PROGRESS_KEY = 'ace_user_progress_local';
+
 export const getUserProgress = async (userId: string): Promise<UserProgress> => {
   try {
+    // 1. Check for Pending Sync
+    const pendingSync = localStorage.getItem(SYNC_KEY);
+    if (pendingSync) {
+        console.log("Found pending progress sync, attempting to upload...");
+        try {
+            const parsed = JSON.parse(pendingSync);
+            // Only sync if it matches current user
+            if (parsed.userId === userId) {
+                const { error } = await supabase
+                    .from('user_progress')
+                    .upsert({ 
+                        user_id: userId, 
+                        data: parsed.progress,
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'user_id' });
+                
+                if (!error) {
+                    console.log("Sync successful, clearing pending state.");
+                    localStorage.removeItem(SYNC_KEY);
+                }
+            }
+        } catch (e) {
+            console.error("Sync failed", e);
+        }
+    }
+
+    // 2. Fetch from Supabase
     const { data, error } = await supabase
       .from('user_progress')
       .select('data')
@@ -28,13 +58,18 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
 
     if (error) {
       if (error.code === 'PGRST116') return initialProgress;
-      if (error.code === '42P01') console.warn("Supabase table 'user_progress' not found.");
+      // If network error, try to load from local storage
+      if (error.message && (error.message.includes('fetch') || error.message.includes('network'))) {
+          console.warn("Network error fetching progress, falling back to local.");
+          const local = localStorage.getItem(`${LOCAL_PROGRESS_KEY}_${userId}`);
+          if (local) return JSON.parse(local);
+      }
       return initialProgress;
     }
 
     if (data) {
       const progress = data.data as UserProgress;
-      return {
+      const merged = {
           ...initialProgress,
           ...progress,
           streak: progress.streak || 0,
@@ -45,11 +80,18 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
           highestExamScore: progress.highestExamScore || 0,
           fastestExamTime: progress.fastestExamTime || 99999
       };
+      
+      // Update local backup
+      localStorage.setItem(`${LOCAL_PROGRESS_KEY}_${userId}`, JSON.stringify(merged));
+      return merged;
     }
 
     return initialProgress;
   } catch (err) {
     console.error('Unexpected error fetching progress:', err);
+    // Fallback
+    const local = localStorage.getItem(`${LOCAL_PROGRESS_KEY}_${userId}`);
+    if (local) return JSON.parse(local);
     return initialProgress;
   }
 };
@@ -111,31 +153,35 @@ export const syncLeaderboardStats = async (
     progress: UserProgress,
     newActivity?: { type: string; xp: number }
 ) => {
-    // 1. Insert Activity Log
-    if (newActivity) {
-        await supabase.from('activity_log').insert({
+    try {
+        // 1. Insert Activity Log
+        if (newActivity) {
+            await supabase.from('activity_log').insert({
+                user_id: userId,
+                username: username,
+                activity_type: newActivity.type,
+                xp_gained: newActivity.xp
+            });
+        }
+
+        // 2. Upsert Leaderboard Stats
+        const totalPracticeParts = Object.values(progress.unlockedPracticeParts).reduce((a, b) => a + (b - 1), 0);
+
+        const { error } = await supabase.from('leaderboard').upsert({
             user_id: userId,
             username: username,
-            activity_type: newActivity.type,
-            xp_gained: newActivity.xp
-        });
+            department: progress.department || 'General',
+            total_xp: progress.totalXp,
+            highest_score: progress.highestExamScore || 0,
+            fastest_exam_time: progress.fastestExamTime || 99999,
+            practice_parts_completed: totalPracticeParts,
+            updated_at: new Date().toISOString()
+        }, { onConflict: 'user_id' });
+
+        if (error) console.error("Failed to sync leaderboard:", error);
+    } catch (e) {
+        console.warn("Offline: Could not sync leaderboard stats.");
     }
-
-    // 2. Upsert Leaderboard Stats
-    const totalPracticeParts = Object.values(progress.unlockedPracticeParts).reduce((a, b) => a + (b - 1), 0);
-
-    const { error } = await supabase.from('leaderboard').upsert({
-        user_id: userId,
-        username: username,
-        department: progress.department || 'General',
-        total_xp: progress.totalXp,
-        highest_score: progress.highestExamScore || 0,
-        fastest_exam_time: progress.fastestExamTime || 99999,
-        practice_parts_completed: totalPracticeParts,
-        updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' });
-
-    if (error) console.error("Failed to sync leaderboard:", error);
 };
 
 export const isDailyChallengeAvailable = (progress: UserProgress): boolean => {
@@ -150,6 +196,9 @@ export const isDailyChallengeAvailable = (progress: UserProgress): boolean => {
 };
 
 export const saveUserProgress = async (userId: string, progress: UserProgress) => {
+  // Always update local backup immediately for UI responsiveness
+  localStorage.setItem(`${LOCAL_PROGRESS_KEY}_${userId}`, JSON.stringify(progress));
+
   try {
     const { error } = await supabase
       .from('user_progress')
@@ -159,11 +208,24 @@ export const saveUserProgress = async (userId: string, progress: UserProgress) =
         updated_at: new Date().toISOString()
       }, { onConflict: 'user_id' });
 
-    if (error && error.code !== '42P01') {
-         console.error('Error saving progress:', error);
+    if (error) {
+        console.warn('Error saving progress remotely:', error);
+        throw error;
+    } else {
+        // If save success, remove any pending sync
+        const pending = localStorage.getItem(SYNC_KEY);
+        if (pending) {
+            const p = JSON.parse(pending);
+            if (p.userId === userId) localStorage.removeItem(SYNC_KEY);
+        }
     }
   } catch (err) {
-    console.error('Unexpected error saving progress:', err);
+    console.error('Offline or Error: Saving progress locally for later sync.');
+    localStorage.setItem(SYNC_KEY, JSON.stringify({
+        userId,
+        progress,
+        timestamp: Date.now()
+    }));
   }
 };
 

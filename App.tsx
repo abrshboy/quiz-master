@@ -37,8 +37,9 @@ function App() {
   const [view, setView] = useState<ViewState>(ViewState.AUTH);
   const [user, setUser] = useState<User | null>(null);
   const [progress, setProgress] = useState<UserProgress>(initialProgress);
-  const [loadingProgress, setLoadingProgress] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(true); // Start true to prevent auth flicker
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [isAppReady, setIsAppReady] = useState(false);
   
   // Selection State
   const [selectedCourse, setSelectedCourse] = useState<string | null>(null);
@@ -51,64 +52,90 @@ function App() {
   // Track time for leaderboard
   const [quizStartTime, setQuizStartTime] = useState<number>(0);
 
-  // Initialize Auth Listener
-  useEffect(() => {
-    // Check active session
-    const checkSession = async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session?.user) {
-        await handleUserLogin(session.user);
-      } else {
-        setLoadingProgress(false);
-      }
-    };
-    
-    checkSession();
-
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      if (session?.user) {
-        setUser(prev => {
-          if (prev?.id !== session.user.id) {
-             handleUserLogin(session.user);
-             return prev; 
-          }
-          return prev;
-        });
-      } else {
-        setUser(null);
-        setView(ViewState.AUTH);
-        setProgress(initialProgress);
-      }
-    });
-
-    return () => subscription.unsubscribe();
-  }, []);
-
   const handleUserLogin = async (authUser: any) => {
+    if (!authUser) return;
+
+    // Normalize User Data
     const newUser: User = {
       id: authUser.id,
       email: authUser.email || '',
       username: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'Student',
     };
-    setUser(newUser);
     
+    // Set user state immediately so UI can react (e.g., showing a different loading message)
+    setUser(newUser);
     setLoadingProgress(true);
+
     try {
         let loadedProgress = await getUserProgress(newUser.id);
         loadedProgress = updateStreak(loadedProgress);
         
         // Sync streak update immediately
+        // Note: saveUserProgress now handles offline sync internally
         await saveUserProgress(newUser.id, loadedProgress);
         await syncLeaderboardStats(newUser.id, newUser.username, loadedProgress);
         
         setProgress(loadedProgress);
+        
+        // Only switch view if we are still on the AUTH screen
+        setView(current => current === ViewState.AUTH ? ViewState.DASHBOARD : current);
     } catch (e) {
         console.error("Failed to load progress", e);
+        // Fallback to initial progress so app doesn't crash
+        setProgress(initialProgress);
+        setView(ViewState.DASHBOARD);
     } finally {
         setLoadingProgress(false);
-        setView(prev => prev === ViewState.AUTH ? ViewState.DASHBOARD : prev);
     }
   };
+
+  // Initialize Auth Listener
+  useEffect(() => {
+    let mounted = true;
+
+    const initAuth = async () => {
+        try {
+            // Check for existing session first
+            const { data: { session } } = await supabase.auth.getSession();
+            if (session?.user && mounted) {
+                await handleUserLogin(session.user);
+            } else if (mounted) {
+                setLoadingProgress(false);
+            }
+        } catch (error) {
+            console.error("Auth init error:", error);
+            if (mounted) setLoadingProgress(false);
+        } finally {
+            if (mounted) setIsAppReady(true);
+        }
+    };
+
+    initAuth();
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (!mounted) return;
+      
+      console.log(`Auth Event: ${event}`);
+
+      if (event === 'SIGNED_IN' && session?.user) {
+         // Avoid double-calling logic if session check already handled it
+         // But ensuring we catch fresh sign-ins
+         if (!user || user.id !== session.user.id) {
+             await handleUserLogin(session.user);
+         }
+      } else if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setView(ViewState.AUTH);
+        setProgress(initialProgress);
+        setLoadingProgress(false);
+      }
+    });
+
+    return () => {
+        mounted = false;
+        subscription.unsubscribe();
+    };
+  }, []); // Run once on mount
 
   const handleUpdateProgress = async (newProgress: UserProgress) => {
     setProgress(newProgress);
@@ -240,9 +267,9 @@ function App() {
   };
 
   const handleLogout = async () => {
+    setLoadingProgress(true);
     await supabase.auth.signOut();
-    setView(ViewState.AUTH);
-    setUser(null);
+    // State clearing handled by onAuthStateChange(SIGNED_OUT)
   };
 
   // --- Render Helpers ---
@@ -429,19 +456,21 @@ function App() {
 
   // --- Main Render Switch ---
 
-  if (view === ViewState.AUTH) {
-    return <AuthView />;
-  }
-  
-  if (loadingProgress) {
+  if (!isAppReady || loadingProgress) {
     return (
        <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="flex flex-col items-center">
             <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-4"></div>
-            <p className="text-gray-500 font-medium">Loading your profile...</p>
+            <p className="text-gray-500 font-medium">
+               {user ? "Syncing your progress..." : "Initializing..."}
+            </p>
           </div>
        </div>
     );
+  }
+
+  if (view === ViewState.AUTH || !user) {
+    return <AuthView />;
   }
 
   // Quiz View is Full Screen

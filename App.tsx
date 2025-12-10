@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   ViewState, 
   User, 
@@ -51,9 +51,17 @@ function App() {
   const [lastScore, setLastScore] = useState<{score: number, passed: boolean} | null>(null);
   const [quizStartTime, setQuizStartTime] = useState<number>(0);
 
+  // Track current user ID to avoid duplicate login calls
+  const currentUserIdRef = useRef<string | null>(null);
+
   // Consolidated Login Logic
   const handleUserLogin = async (authUser: any) => {
     if (!authUser) return;
+
+    // Prevent duplicate processing if we are already handling this user
+    if (currentUserIdRef.current === authUser.id && user) return;
+    
+    currentUserIdRef.current = authUser.id;
 
     const newUser: User = {
       id: authUser.id,
@@ -61,7 +69,6 @@ function App() {
       username: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'Student',
     };
     
-    // Set user immediately to prevent AuthView from lingering if logic takes time
     setUser(newUser);
     setLoadingProgress(true);
 
@@ -69,10 +76,12 @@ function App() {
         let loadedProgress = await getUserProgress(newUser.id);
         loadedProgress = updateStreak(loadedProgress);
         
+        // Optimistic update and background sync
+        setProgress(loadedProgress);
+        
         await saveUserProgress(newUser.id, loadedProgress);
         await syncLeaderboardStats(newUser.id, newUser.username, loadedProgress);
         
-        setProgress(loadedProgress);
         setView(ViewState.DASHBOARD);
     } catch (e) {
         console.error("Failed to load progress", e);
@@ -111,15 +120,11 @@ function App() {
       console.log(`Auth Event: ${event}`);
 
       if (event === 'SIGNED_IN' && session?.user) {
-         // Using functional update to check if we really need to re-login
-         setUser(currentUser => {
-             if (currentUser?.id !== session.user.id) {
-                 // Trigger async login but don't await it inside the setter
-                 handleUserLogin(session.user);
-             }
-             return currentUser;
-         });
+         if (currentUserIdRef.current !== session.user.id) {
+             await handleUserLogin(session.user);
+         }
       } else if (event === 'SIGNED_OUT') {
+        currentUserIdRef.current = null;
         setUser(null);
         setView(ViewState.AUTH);
         setProgress(initialProgress);
@@ -445,7 +450,7 @@ function App() {
 
   // --- Main Render Switch ---
 
-  if (!isAppReady || loadingProgress) {
+  if (!isAppReady || (loadingProgress && !view)) {
     return (
        <div className="min-h-screen flex items-center justify-center bg-gray-50">
           <div className="flex flex-col items-center">

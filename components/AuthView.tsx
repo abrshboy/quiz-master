@@ -22,7 +22,8 @@ export const AuthView: React.FC = () => {
           password,
         });
         if (signUpError) throw signUpError;
-        setMessage("Account created! Please check your email for the confirmation link.");
+        setMessage("Account created! Please check your email inbox to verify your account before logging in.");
+        setIsSignUp(false); // Switch to login view so they can login after verifying
       } else {
         const { error: signInError } = await supabase.auth.signInWithPassword({
           email,
@@ -33,7 +34,35 @@ export const AuthView: React.FC = () => {
       }
     } catch (err: any) {
       console.error("Auth error:", err);
-      setError(err.message || "Authentication failed. Please try again.");
+      let msg = err.message || "Authentication failed.";
+      
+      if (msg.includes("Invalid login credentials")) {
+        msg = "Invalid email or password. If you just signed up, please verify your email address via the link sent to your inbox.";
+      } else if (msg.includes("User already registered")) {
+        msg = "This email is already registered. Please sign in instead.";
+      }
+      
+      setError(msg);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasswordReset = async () => {
+    if (!email) {
+      setError("Please enter your email address first to reset your password.");
+      return;
+    }
+    setLoading(true);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, {
+        redirectTo: window.location.origin,
+      });
+      if (error) throw error;
+      setMessage("Password reset email sent! Check your inbox.");
+      setError(null);
+    } catch (err: any) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
@@ -42,26 +71,28 @@ export const AuthView: React.FC = () => {
   return (
     <div className="min-h-screen flex items-center justify-center p-4 bg-gray-50">
       <div className="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-gray-100 transition-all hover:shadow-2xl duration-500">
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <h1 className="text-3xl font-bold text-gray-800 mb-2">AceAcademia</h1>
-          <p className="text-gray-500">{isSignUp ? 'Create an account to begin' : 'Welcome back, please login'}</p>
+          <p className="text-gray-500">
+            {isSignUp ? 'Create a new account' : 'Welcome back, please login'}
+          </p>
         </div>
 
         {error && (
-          <div className="p-3 rounded-lg mb-4 text-sm bg-red-50 text-red-600">
+          <div className="p-3 rounded-lg mb-4 text-sm bg-red-50 text-red-700 border border-red-100">
             {error}
           </div>
         )}
         
         {message && (
-          <div className="p-3 rounded-lg mb-4 text-sm bg-green-50 text-green-600">
+          <div className="p-3 rounded-lg mb-4 text-sm bg-green-50 text-green-700 border border-green-100">
             {message}
           </div>
         )}
 
         <form onSubmit={handleAuth} className="space-y-4">
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Email Address</label>
             <input
               type="email"
               required
@@ -72,7 +103,18 @@ export const AuthView: React.FC = () => {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <div className="flex justify-between items-center mb-1">
+              <label className="block text-sm font-medium text-gray-700">Password</label>
+              {!isSignUp && (
+                <button 
+                  type="button"
+                  onClick={handlePasswordReset}
+                  className="text-xs text-blue-600 hover:underline focus:outline-none"
+                >
+                  Forgot password?
+                </button>
+              )}
+            </div>
             <input
               type="password"
               required
@@ -93,16 +135,20 @@ export const AuthView: React.FC = () => {
         </form>
 
         <div className="text-center mt-6 pt-4 border-t border-gray-100">
-          <p className="text-sm text-gray-500">
+          <p className="text-sm text-gray-500 mb-2">
             {isSignUp ? 'Already have an account?' : "Don't have an account?"}
-            <button
-              onClick={() => { setIsSignUp(!isSignUp); setError(null); setMessage(null); }}
-              className="text-blue-600 font-semibold ml-1 hover:underline focus:outline-none"
-              type="button"
-            >
-              {isSignUp ? 'Log in' : 'Sign up'}
-            </button>
           </p>
+          <button
+            onClick={() => { 
+              setIsSignUp(!isSignUp); 
+              setError(null); 
+              setMessage(null); 
+            }}
+            className="w-full py-2 rounded-lg border border-gray-200 text-gray-700 font-medium hover:bg-gray-50 transition-colors"
+            type="button"
+          >
+            {isSignUp ? 'Switch to Log In' : 'Create an Account'}
+          </button>
         </div>
       </div>
     </div>

@@ -43,16 +43,25 @@ function App() {
 
   // Initialize Auth Listener
   useEffect(() => {
+    let mounted = true;
+
     // Check for initial session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (session?.user) {
+    const initSession = async () => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (mounted && session?.user) {
         handleUserSession(session.user);
       }
-    });
+    };
+    initSession();
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+        if (!mounted) return;
+        
         if (session?.user) {
-            handleUserSession(session.user);
+            // Only update if we aren't already logged in as this user to prevent unnecessary fetches
+            if (user?.email !== session.user.email) {
+               handleUserSession(session.user);
+            }
         } else {
             setUser(null);
             setView(ViewState.AUTH);
@@ -60,27 +69,29 @@ function App() {
         }
     });
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, []); // Empty dependency array intentional
 
   const handleUserSession = async (supabaseUser: any) => {
     setUser({ username: supabaseUser.email?.split('@')[0] || 'Student', email: supabaseUser.email! });
     
     // Only fetch progress if we don't have it or if the user changed
-    // We set loading state to avoid flicker
     setLoadingProgress(true);
     const data = await getUserProgress(supabaseUser.id);
     setProgress(data);
     setLoadingProgress(false);
     
-    // Move to dashboard if currently on Auth screen
-    setView((prev) => prev === ViewState.AUTH ? ViewState.DASHBOARD : prev);
+    setView(ViewState.DASHBOARD);
   };
 
   const handleLogout = async () => {
       await supabase.auth.signOut();
       setView(ViewState.AUTH);
+      setUser(null);
   }
 
   // Navigation Handlers

@@ -36,8 +36,9 @@ export const AuthView: React.FC = () => {
       console.error("Auth error:", err);
       let msg = err.message || "Authentication failed.";
       
+      // Supabase specific error handling
       if (msg.includes("Invalid login credentials")) {
-        msg = "Invalid email or password. If you just signed up, please verify your email address via the link sent to your inbox.";
+        msg = "Invalid email or password. If you just created an account, please verify your email address via the link sent to your inbox.";
       } else if (msg.includes("User already registered")) {
         msg = "This email is already registered. Please sign in instead.";
       }
@@ -79,13 +80,13 @@ export const AuthView: React.FC = () => {
         </div>
 
         {error && (
-          <div className="p-3 rounded-lg mb-4 text-sm bg-red-50 text-red-700 border border-red-100">
+          <div className="p-3 rounded-lg mb-4 text-sm bg-red-50 text-red-700 border border-red-100 animate-fade-in">
             {error}
           </div>
         )}
         
         {message && (
-          <div className="p-3 rounded-lg mb-4 text-sm bg-green-50 text-green-700 border border-green-100">
+          <div className="p-3 rounded-lg mb-4 text-sm bg-green-50 text-green-700 border border-green-100 animate-fade-in">
             {message}
           </div>
         )}

@@ -24,7 +24,6 @@ import {
 } from './services/progressService';
 import { supabase } from './services/supabaseClient';
 
-// Replace with your preferred admin email or remove check to allow all authenticated users
 const ADMIN_EMAIL = 'admin@aceacademia.com';
 
 function App() {
@@ -44,76 +43,81 @@ function App() {
 
   // Initialize Auth Listener
   useEffect(() => {
-    let mounted = true;
-
-    // Check for initial session
-    const initSession = async () => {
+    // Check active session
+    const checkSession = async () => {
       const { data: { session } } = await supabase.auth.getSession();
-      if (mounted && session?.user) {
-        handleUserSession(session.user);
+      if (session?.user) {
+        await handleUserLogin(session.user);
+      } else {
+        setLoadingProgress(false);
       }
     };
-    initSession();
+    
+    checkSession();
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
-        if (!mounted) return;
-        
-        if (session?.user) {
-            // Only update if we aren't already logged in as this user to prevent unnecessary fetches
-            if (user?.email !== session.user.email) {
-               handleUserSession(session.user);
-            }
-        } else {
-            setUser(null);
-            setView(ViewState.AUTH);
-            setProgress(initialProgress);
-        }
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+      if (session?.user) {
+        // Only trigger login logic if we don't already have the user or if the user changed
+        setUser(prev => {
+          if (prev?.id !== session.user.id) {
+             handleUserLogin(session.user);
+             return prev; // State update happens in handleUserLogin
+          }
+          return prev;
+        });
+      } else {
+        setUser(null);
+        setView(ViewState.AUTH);
+        setProgress(initialProgress);
+      }
     });
 
-    return () => {
-      mounted = false;
-      subscription.unsubscribe();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Empty dependency array intentional
+    return () => subscription.unsubscribe();
+  }, []);
 
-  const handleUserSession = async (supabaseUser: any) => {
-    // Check for display name in metadata, fallback to email username
-    const displayName = supabaseUser.user_metadata?.full_name || supabaseUser.email?.split('@')[0] || 'Student';
+  const handleUserLogin = async (authUser: any) => {
+    const newUser: User = {
+      id: authUser.id,
+      email: authUser.email || '',
+      username: authUser.user_metadata?.full_name || authUser.email?.split('@')[0] || 'Student',
+    };
+    setUser(newUser);
     
-    setUser({ 
-        id: supabaseUser.id,
-        username: displayName, 
-        email: supabaseUser.email! 
-    });
-    
-    // Only fetch progress if we don't have it or if the user changed
     setLoadingProgress(true);
-    const data = await getUserProgress(supabaseUser.id);
-    setProgress(data);
-    setLoadingProgress(false);
-    
-    // If we were on auth page, go to dashboard. Otherwise stay put (e.g. reload)
-    setView(v => v === ViewState.AUTH ? ViewState.DASHBOARD : v);
+    try {
+        const loadedProgress = await getUserProgress(newUser.id);
+        setProgress(loadedProgress);
+    } catch (e) {
+        console.error("Failed to load progress", e);
+    } finally {
+        setLoadingProgress(false);
+        // Only switch view if we are still on AUTH page
+        setView(prev => prev === ViewState.AUTH ? ViewState.DASHBOARD : prev);
+    }
   };
 
-  const handleLogout = async () => {
-      await supabase.auth.signOut();
-      setView(ViewState.AUTH);
-      setUser(null);
-  }
+  const handleUpdateProgress = async (newProgress: UserProgress) => {
+    setProgress(newProgress);
+    if (user) {
+      await saveUserProgress(user.id, newProgress);
+    }
+  };
 
-  // Navigation Handlers
-  const handleCourseSelect = (id: string, active: boolean) => {
-    if (!active) return;
-    setSelectedCourse(id);
-    setView(ViewState.YEAR_SELECT);
+  const handleCourseSelect = (courseId: string) => {
+    const course = COURSES.find(c => c.id === courseId);
+    if (course && course.active) {
+      setSelectedCourse(courseId);
+      setView(ViewState.YEAR_SELECT);
+    } else {
+      alert("This course is coming soon!");
+    }
   };
 
   const handleYearSelect = (year: number) => {
-    if (!progress.unlockedYears.includes(year)) return;
-    setSelectedYear(year);
-    setView(ViewState.MODE_SELECT);
+    if (progress.unlockedYears.includes(year)) {
+      setSelectedYear(year);
+      setView(ViewState.MODE_SELECT);
+    }
   };
 
   const handleModeSelect = (mode: QuizMode) => {
@@ -126,19 +130,13 @@ function App() {
   };
 
   const handlePartSelect = (part: number) => {
-    const currentYear = selectedYear || 2015;
-    const maxUnlocked = progress.unlockedPracticeParts[currentYear] || 1;
-    if (part > maxUnlocked) return;
-    setSelectedPart(part);
-    setView(ViewState.QUIZ);
-  };
-
-  // Called by Quiz when it updates session data (intermediate save)
-  const handleProgressUpdate = async (newProgress: UserProgress) => {
-      setProgress(newProgress);
-      if (user?.id) {
-          await saveUserProgress(user.id, newProgress);
+    if (selectedYear) {
+      const maxPart = progress.unlockedPracticeParts[selectedYear] || 1;
+      if (part <= maxPart) {
+        setSelectedPart(part);
+        setView(ViewState.QUIZ);
       }
+    }
   };
 
   const handleQuizComplete = async (score: number, passed: boolean) => {
@@ -146,104 +144,121 @@ function App() {
     
     let newProgress = { ...progress };
 
-    if (selectedMode === QuizMode.PRACTICE && passed) {
-        newProgress = unlockNextPartLocal(selectedYear!, selectedPart!, newProgress);
-    } else if (selectedMode === QuizMode.EXAM && passed) {
-        newProgress = unlockNextYearLocal(selectedYear!, newProgress);
-        if (!newProgress.completedExams.includes(selectedYear!)) {
-            newProgress.completedExams.push(selectedYear!);
+    if (passed && selectedYear && selectedMode) {
+      if (selectedMode === QuizMode.EXAM) {
+        // Unlock next year logic
+        newProgress = unlockNextYearLocal(selectedYear, newProgress);
+        
+        // Add to completed exams if not already there
+        if (!newProgress.completedExams.includes(selectedYear)) {
+          newProgress.completedExams = [...newProgress.completedExams, selectedYear];
         }
+      } else if (selectedMode === QuizMode.PRACTICE && selectedPart) {
+        // Unlock next part logic
+        newProgress = unlockNextPartLocal(selectedYear, selectedPart, newProgress);
+        
+        // Save score
+        const scoreKey = `${selectedYear}-${selectedPart}`;
+        const currentBest = newProgress.practiceScores[scoreKey] || 0;
+        if (score > currentBest) {
+          newProgress.practiceScores[scoreKey] = score;
+        }
+      }
+      
+      await handleUpdateProgress(newProgress);
     }
-    
-    // Optimistic Update
-    setProgress(newProgress);
-    setView(ViewState.RESULT);
 
-    // Persist
-    if (user?.id) {
-        await saveUserProgress(user.id, newProgress);
-    }
+    setView(ViewState.RESULT);
   };
 
-  const resetSelection = () => {
+  const handleQuizExit = () => {
+    // If exiting mid-quiz, just go back to dashboard or appropriate menu
+    // Progress is auto-saved by the Quiz component via onProgressUpdate hook
     setView(ViewState.DASHBOARD);
-    setSelectedCourse(null);
     setSelectedYear(null);
     setSelectedMode(null);
     setSelectedPart(null);
-  }
+    setSelectedCourse(null);
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    setView(ViewState.AUTH);
+    setUser(null);
+  };
+
+  // --- Render Helpers ---
 
   const renderDashboard = () => (
-    <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
+    <div className="max-w-4xl mx-auto p-6 animate-fade-in">
+      <div className="flex justify-between items-center mb-8">
         <div>
-             <h1 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back, {user?.username}</h1>
-             <p className="text-gray-500">Select a course to continue your studies.</p>
+          <h1 className="text-3xl font-bold text-gray-800">Welcome, {user?.username}</h1>
+          <p className="text-gray-600 mt-1">Select a course to begin your learning journey</p>
         </div>
         <div className="flex gap-3">
-          {user?.email === ADMIN_EMAIL && (
+             {user?.email === ADMIN_EMAIL && (
             <button 
               onClick={() => setView(ViewState.ADMIN)}
-              className="text-sm bg-gray-800 text-white hover:bg-black transition-colors px-4 py-2 rounded-lg font-medium shadow-md"
+              className="bg-gray-800 text-white px-4 py-2 rounded-lg hover:bg-gray-900 transition shadow-lg flex items-center gap-2"
             >
-              Admin
+              <Icons.Shield className="w-4 h-4" /> Admin
             </button>
           )}
           <button 
             onClick={() => setView(ViewState.PROFILE)}
-            className="text-sm bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors px-4 py-2 rounded-lg font-medium shadow-sm"
+            className="bg-white text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 border border-gray-200 transition shadow-sm flex items-center gap-2"
           >
-              <Icons.User className="w-4 h-4" /> Profile
+            <Icons.User className="w-4 h-4" /> Profile
           </button>
-          <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 flex items-center gap-1 transition-colors px-4 py-2 rounded-lg hover:bg-gray-100">
-              <Icons.LogOut className="w-4 h-4" /> Sign Out
+          <button 
+            onClick={handleLogout}
+            className="bg-white text-red-600 px-4 py-2 rounded-lg hover:bg-red-50 border border-gray-200 transition shadow-sm flex items-center gap-2"
+          >
+             <Icons.LogOut className="w-4 h-4" /> Logout
           </button>
         </div>
       </div>
-      
-      {loadingProgress ? (
-          <div className="flex justify-center p-12">
-               <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-600"></div>
-          </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
-            {COURSES.map((course) => {
-            const Icon = Icons[course.icon as keyof typeof Icons];
-            return (
-                <div 
-                key={course.id} 
-                onClick={() => handleCourseSelect(course.id, course.active)}
-                className={`relative bg-white rounded-2xl p-6 shadow-sm border transition-all duration-300 group overflow-hidden ${
-                    course.active 
-                    ? 'cursor-pointer hover:shadow-xl hover:-translate-y-1 border-gray-200 hover:border-blue-200' 
-                    : 'opacity-75 cursor-not-allowed border-gray-100 bg-gray-50'
-                }`}
-                >
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-colors duration-300 ${course.active ? 'bg-blue-100 text-blue-600 group-hover:bg-blue-600 group-hover:text-white' : 'bg-gray-200 text-gray-400'}`}>
-                    <Icon className="w-6 h-6" />
-                </div>
-                <h3 className={`text-xl font-bold mb-2 ${course.active ? 'text-gray-800' : 'text-gray-800'}`}>{course.title}</h3>
-                <p className="text-gray-500 text-sm">{course.active ? 'Available Now' : 'Coming Soon'}</p>
-                
-                {!course.active && (
-                    <div className="absolute top-4 right-4 bg-yellow-100 text-yellow-700 text-xs font-bold px-2 py-1 rounded">
-                        LOCKED
-                    </div>
-                )}
-                </div>
-            );
-            })}
-        </div>
-      )}
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {COURSES.map((course) => {
+          const Icon = Icons[course.icon as keyof typeof Icons];
+          return (
+            <button
+              key={course.id}
+              onClick={() => handleCourseSelect(course.id)}
+              className={`p-6 rounded-2xl border-2 text-left transition-all duration-300 group ${
+                course.active 
+                  ? 'bg-white border-transparent hover:border-blue-500 shadow-lg hover:shadow-xl hover:-translate-y-1' 
+                  : 'bg-gray-50 border-gray-200 opacity-70 cursor-not-allowed'
+              }`}
+            >
+              <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-4 transition-colors ${
+                course.active ? 'bg-blue-100 text-blue-600 group-hover:bg-blue-600 group-hover:text-white' : 'bg-gray-200 text-gray-400'
+              }`}>
+                <Icon className="w-6 h-6" />
+              </div>
+              <h3 className="text-xl font-bold text-gray-800 mb-2">{course.title}</h3>
+              <p className="text-sm text-gray-500">
+                {course.active ? 'Available for practice and exams' : 'Coming Soon'}
+              </p>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 
   const renderYearSelect = () => (
-    <div className="p-6 max-w-4xl mx-auto">
-      <button onClick={() => setView(ViewState.DASHBOARD)} className="mb-6 flex items-center text-gray-500 hover:text-gray-800 transition-colors">
-        <Icons.ChevronLeft className="w-5 h-5 mr-1" /> Back to Courses
+    <div className="max-w-2xl mx-auto p-6 animate-fade-in">
+      <button 
+        onClick={() => setView(ViewState.DASHBOARD)} 
+        className="mb-6 text-gray-500 hover:text-gray-800 flex items-center gap-2 transition-colors"
+      >
+        <Icons.ChevronLeft className="w-5 h-5" /> Back to Courses
       </button>
-      <h2 className="text-2xl font-bold text-gray-800 mb-8">Select Academic Year</h2>
+      
+      <h2 className="text-2xl font-bold text-gray-800 mb-6">Select Academic Year</h2>
       
       <div className="space-y-4">
         {YEARS.map((year) => {
@@ -255,22 +270,26 @@ function App() {
               key={year}
               onClick={() => handleYearSelect(year)}
               disabled={!isUnlocked}
-              className={`w-full flex items-center justify-between p-6 rounded-xl border-2 text-left transition-all duration-300 group ${
-                isUnlocked 
-                  ? 'bg-white border-blue-100 hover:border-blue-500 shadow-sm hover:shadow-md hover:scale-[1.01]' 
-                  : 'bg-gray-100 border-gray-200 cursor-not-allowed opacity-60'
+              className={`w-full p-5 rounded-xl border-2 flex justify-between items-center transition-all ${
+                isUnlocked
+                  ? 'bg-white border-gray-200 hover:border-blue-500 hover:shadow-md cursor-pointer'
+                  : 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed'
               }`}
             >
               <div className="flex items-center gap-4">
-                <div className={`w-10 h-10 rounded-full flex items-center justify-center transition-colors ${isUnlocked ? 'bg-blue-100 text-blue-600 group-hover:bg-blue-600 group-hover:text-white' : 'bg-gray-300 text-gray-500'}`}>
-                   {isUnlocked ? <Icons.Unlock className="w-5 h-5"/> : <Icons.Lock className="w-5 h-5"/>}
+                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                  isCompleted ? 'bg-green-100 text-green-600' : (isUnlocked ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-400')
+                }`}>
+                  {isCompleted ? <Icons.CheckCircle className="w-6 h-6" /> : (isUnlocked ? <Icons.Unlock className="w-5 h-5" /> : <Icons.Lock className="w-5 h-5" />)}
                 </div>
-                <div>
-                  <h3 className="text-lg font-bold text-gray-800">{year} Curriculum</h3>
-                  <p className="text-sm text-gray-500">{isUnlocked ? (isCompleted ? "Exam Passed" : "In Progress") : "Complete previous year to unlock"}</p>
+                <div className="text-left">
+                  <span className="block text-lg font-bold text-gray-800">{year} Curriculum</span>
+                  <span className="text-sm text-gray-500">
+                    {isCompleted ? 'Completed' : (isUnlocked ? 'Available' : 'Locked - Finish previous year')}
+                  </span>
                 </div>
               </div>
-              {isCompleted && <Icons.CheckCircle className="w-6 h-6 text-green-500" />}
+              {isUnlocked && <Icons.ChevronLeft className="w-5 h-5 rotate-180 text-gray-400" />}
             </button>
           );
         })}
@@ -279,158 +298,216 @@ function App() {
   );
 
   const renderModeSelect = () => (
-    <div className="p-6 max-w-4xl mx-auto">
-       <button onClick={() => setView(ViewState.YEAR_SELECT)} className="mb-6 flex items-center text-gray-500 hover:text-gray-800 transition-colors">
-        <Icons.ChevronLeft className="w-5 h-5 mr-1" /> Back to Years
+    <div className="max-w-2xl mx-auto p-6 animate-fade-in">
+      <button 
+        onClick={() => setView(ViewState.YEAR_SELECT)} 
+        className="mb-6 text-gray-500 hover:text-gray-800 flex items-center gap-2 transition-colors"
+      >
+        <Icons.ChevronLeft className="w-5 h-5" /> Back to Years
       </button>
-      <h2 className="text-2xl font-bold text-gray-800 mb-8">Select Mode for {selectedYear}</h2>
-      
-      <div className="grid md:grid-cols-2 gap-6">
-        <div 
-            onClick={() => handleModeSelect(QuizMode.PRACTICE)}
-            className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:border-green-400 cursor-pointer transition-all hover:shadow-xl hover:-translate-y-1 group relative overflow-hidden"
-        >
-            <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <Icons.Briefcase className="w-24 h-24 text-green-600" />
-            </div>
-            <div className="bg-green-100 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 text-green-600 group-hover:scale-110 transition-transform duration-300">
-                <Icons.Briefcase className="w-8 h-8" />
-            </div>
-            <h3 className="text-2xl font-bold text-gray-800 mb-2">Practice Mode</h3>
-            <p className="text-gray-500 mb-4">10 parts, 10 questions each. Immediate feedback. 10 minutes per part.</p>
-             <span className="text-green-600 font-semibold text-sm group-hover:underline">Start Practice &rarr;</span>
-        </div>
 
-        <div 
-            onClick={() => handleModeSelect(QuizMode.EXAM)}
-            className="bg-white p-8 rounded-2xl shadow-sm border border-gray-200 hover:border-purple-400 cursor-pointer transition-all hover:shadow-xl hover:-translate-y-1 group relative overflow-hidden"
+      <h2 className="text-2xl font-bold text-gray-800 mb-2">Select Mode</h2>
+      <p className="text-gray-600 mb-8">Choose how you want to test your knowledge for {selectedYear}</p>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <button
+          onClick={() => handleModeSelect(QuizMode.PRACTICE)}
+          className="p-8 bg-white rounded-2xl border-2 border-transparent hover:border-blue-500 shadow-lg hover:shadow-xl transition-all group text-left"
         >
-             <div className="absolute top-0 right-0 p-4 opacity-10 group-hover:opacity-20 transition-opacity">
-                <Icons.Cpu className="w-24 h-24 text-purple-600" />
-            </div>
-             <div className="bg-purple-100 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 text-purple-600 group-hover:scale-110 transition-transform duration-300">
-                <Icons.Cpu className="w-8 h-8" />
-            </div>
-            <h3 className="text-2xl font-bold text-gray-800 mb-2">Exam Mode</h3>
-            <p className="text-gray-500 mb-4">100 questions. No feedback until the end. 100 minutes. Pass mark: 51%.</p>
-            <span className="text-purple-600 font-semibold text-sm group-hover:underline">Start Exam &rarr;</span>
-        </div>
+          <div className="w-14 h-14 bg-blue-100 text-blue-600 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-blue-600 group-hover:text-white transition-colors">
+            <Icons.Briefcase className="w-7 h-7" />
+          </div>
+          <h3 className="text-xl font-bold text-gray-800 mb-2">Practice Mode</h3>
+          <p className="text-gray-500 text-sm leading-relaxed">
+            Master the content part by part. Instant feedback on every question. 
+            No penalties for wrong answers.
+          </p>
+        </button>
+
+        <button
+          onClick={() => handleModeSelect(QuizMode.EXAM)}
+          className="p-8 bg-white rounded-2xl border-2 border-transparent hover:border-purple-500 shadow-lg hover:shadow-xl transition-all group text-left"
+        >
+          <div className="w-14 h-14 bg-purple-100 text-purple-600 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-purple-600 group-hover:text-white transition-colors">
+            <Icons.Clock className="w-7 h-7" />
+          </div>
+          <h3 className="text-xl font-bold text-gray-800 mb-2">Exam Mode</h3>
+          <p className="text-gray-500 text-sm leading-relaxed">
+            The real deal. 100 questions, timed. No feedback until the end. 
+            Pass this to unlock the next year.
+          </p>
+        </button>
       </div>
     </div>
   );
 
-  const renderPracticeList = () => {
-    const unlockedLevel = progress.unlockedPracticeParts[selectedYear!] || 1;
-    
-    return (
-        <div className="p-6 max-w-4xl mx-auto">
-            <button onClick={() => setView(ViewState.MODE_SELECT)} className="mb-6 flex items-center text-gray-500 hover:text-gray-800 transition-colors">
-                <Icons.ChevronLeft className="w-5 h-5 mr-1" /> Back to Modes
+  const renderPracticeList = () => (
+    <div className="max-w-3xl mx-auto p-6 animate-fade-in">
+      <button 
+        onClick={() => setView(ViewState.MODE_SELECT)} 
+        className="mb-6 text-gray-500 hover:text-gray-800 flex items-center gap-2 transition-colors"
+      >
+        <Icons.ChevronLeft className="w-5 h-5" /> Back to Modes
+      </button>
+
+      <h2 className="text-2xl font-bold text-gray-800 mb-6">Select Practice Part</h2>
+
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        {Array.from({ length: PRACTICE_PARTS_COUNT }).map((_, idx) => {
+          const partNum = idx + 1;
+          const maxUnlocked = (selectedYear && progress.unlockedPracticeParts[selectedYear]) || 1;
+          const isUnlocked = partNum <= maxUnlocked;
+          const score = selectedYear ? progress.practiceScores[`${selectedYear}-${partNum}`] : undefined;
+
+          return (
+            <button
+              key={partNum}
+              onClick={() => handlePartSelect(partNum)}
+              disabled={!isUnlocked}
+              className={`p-4 rounded-xl border flex justify-between items-center transition-all ${
+                isUnlocked 
+                  ? 'bg-white border-gray-200 hover:border-blue-400 hover:shadow-md' 
+                  : 'bg-gray-50 border-gray-100 opacity-60 cursor-not-allowed'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold ${
+                   score !== undefined && score >= PASSING_SCORE ? 'bg-green-100 text-green-700' : (isUnlocked ? 'bg-blue-100 text-blue-700' : 'bg-gray-200 text-gray-500')
+                }`}>
+                  {partNum}
+                </div>
+                <div className="text-left">
+                  <div className="font-semibold text-gray-700">Part {partNum}</div>
+                  {score !== undefined && (
+                    <div className="text-xs text-gray-500">Best: {score.toFixed(0)}%</div>
+                  )}
+                </div>
+              </div>
+              {!isUnlocked && <Icons.Lock className="w-4 h-4 text-gray-400" />}
             </button>
-            <h2 className="text-2xl font-bold text-gray-800 mb-8">Practice Sessions ({selectedYear})</h2>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                {Array.from({ length: PRACTICE_PARTS_COUNT }).map((_, i) => {
-                    const partNum = i + 1;
-                    const isUnlocked = partNum <= unlockedLevel;
-                    return (
-                        <button
-                            key={partNum}
-                            disabled={!isUnlocked}
-                            onClick={() => handlePartSelect(partNum)}
-                            className={`flex flex-col items-center justify-center p-6 rounded-xl border-2 transition-all duration-300 ${
-                                isUnlocked 
-                                ? 'bg-white border-blue-100 hover:border-blue-500 hover:shadow-lg hover:-translate-y-1 cursor-pointer text-blue-600' 
-                                : 'bg-gray-100 border-gray-200 opacity-50 cursor-not-allowed text-gray-400'
-                            }`}
-                        >
-                            <span className={`text-2xl font-bold mb-1`}>{partNum}</span>
-                            <span className="text-xs text-gray-500 uppercase font-semibold">Part</span>
-                            {!isUnlocked && <Icons.Lock className="w-4 h-4 text-gray-400 mt-2" />}
-                        </button>
-                    )
-                })}
-            </div>
-        </div>
-    );
-  };
+          );
+        })}
+      </div>
+    </div>
+  );
 
-  const renderResult = () => {
-    const passed = lastScore?.passed;
-    return (
-        <div className="min-h-screen flex items-center justify-center p-6 bg-gray-50">
-             <div className="bg-white p-10 rounded-3xl shadow-xl max-w-lg w-full text-center border border-gray-100 animate-fade-in">
-                <div className={`w-24 h-24 rounded-full mx-auto flex items-center justify-center mb-6 shadow-inner ${passed ? 'bg-green-100 text-green-600' : 'bg-red-100 text-red-600'}`}>
-                    {passed ? <Icons.CheckCircle className="w-12 h-12" /> : <Icons.XCircle className="w-12 h-12" />}
-                </div>
-                
-                <h2 className={`text-3xl font-bold mb-2 ${passed ? 'text-gray-800' : 'text-gray-800'}`}>
-                    {passed ? 'Congratulations!' : 'Keep Practicing'}
-                </h2>
-                <p className="text-gray-500 mb-8">
-                    {passed 
-                        ? `You have passed this ${selectedMode} session.` 
-                        : `You didn't meet the passing criteria of ${PASSING_SCORE}%.`}
-                </p>
+  const renderResult = () => (
+    <div className="max-w-md mx-auto p-8 text-center animate-fade-in mt-12">
+      <div className={`w-24 h-24 rounded-full mx-auto flex items-center justify-center mb-6 shadow-xl ${
+        lastScore?.passed ? 'bg-green-500 text-white' : 'bg-red-500 text-white'
+      }`}>
+        {lastScore?.passed ? <Icons.CheckCircle className="w-12 h-12" /> : <Icons.XCircle className="w-12 h-12" />}
+      </div>
+      
+      <h2 className="text-3xl font-bold text-gray-800 mb-2">
+        {lastScore?.passed ? 'Congratulations!' : 'Keep Trying!'}
+      </h2>
+      
+      <p className="text-gray-600 mb-8">
+        You scored <span className="font-bold text-gray-900">{lastScore?.score.toFixed(1)}%</span>. 
+        {lastScore?.passed ? ' You have passed this section.' : ' You need 51% to pass.'}
+      </p>
 
-                <div className="bg-gray-50 rounded-xl p-6 mb-8 border border-gray-100">
-                    <span className="block text-sm text-gray-500 uppercase tracking-wider font-semibold mb-1">Your Score</span>
-                    <span className={`text-5xl font-bold ${passed ? 'text-green-600' : 'text-red-500'}`}>
-                        {lastScore?.score.toFixed(1)}%
-                    </span>
-                </div>
-
-                <div className="space-y-3">
-                    <button onClick={resetSelection} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg transition-all shadow-lg shadow-blue-200 hover:-translate-y-0.5">
-                        Back to Dashboard
-                    </button>
-                    {selectedMode === QuizMode.PRACTICE && !passed && (
-                         <button onClick={() => setView(ViewState.QUIZ)} className="w-full bg-white hover:bg-gray-50 text-gray-700 font-bold py-3 rounded-lg border border-gray-300 transition-colors">
-                            Retry Part
-                        </button>
-                    )}
-                </div>
-             </div>
-        </div>
-    );
-  };
+      <div className="space-y-3">
+        {lastScore?.passed && selectedMode === QuizMode.EXAM && (
+           <div className="bg-blue-50 text-blue-800 p-4 rounded-xl mb-6 text-sm">
+             🎉 New Year Unlocked! You can now access the next year's curriculum.
+           </div>
+        )}
+        
+        <button
+          onClick={() => setView(ViewState.DASHBOARD)}
+          className="w-full bg-gray-800 text-white py-3 rounded-xl font-medium hover:bg-gray-900 transition shadow-lg"
+        >
+          Return to Dashboard
+        </button>
+        
+        <button
+          onClick={() => {
+            if (selectedMode === QuizMode.PRACTICE) setView(ViewState.PRACTICE_LIST);
+            else setView(ViewState.MODE_SELECT);
+          }}
+          className="w-full bg-white text-gray-700 border border-gray-300 py-3 rounded-xl font-medium hover:bg-gray-50 transition"
+        >
+          Try Again
+        </button>
+      </div>
+    </div>
+  );
 
   // Main Render Switch
-  if (view === ViewState.AUTH) return <AuthView />;
-  if (view === ViewState.DASHBOARD) return renderDashboard();
-  if (view === ViewState.YEAR_SELECT) return renderYearSelect();
-  if (view === ViewState.MODE_SELECT) return renderModeSelect();
-  if (view === ViewState.PRACTICE_LIST) return renderPracticeList();
-  if (view === ViewState.RESULT) return renderResult();
-  if (view === ViewState.ADMIN) return <AdminUpload onBack={() => setView(ViewState.DASHBOARD)} />;
-  if (view === ViewState.PROFILE && user) {
-      return (
-          <ProfileDashboard 
-            user={user} 
-            progress={progress} 
-            onBack={() => setView(ViewState.DASHBOARD)}
-            onUpdateUser={setUser}
-            onResetProgress={() => setProgress(initialProgress)}
-          />
-      );
+  if (view === ViewState.AUTH) {
+    return <AuthView />;
   }
-  if (view === ViewState.QUIZ) {
+  
+  if (loadingProgress) {
     return (
-        <div className="p-4 md:p-6 min-h-screen">
-             <Quiz 
-                courseId={selectedCourse!}
-                year={selectedYear!}
-                mode={selectedMode!}
-                part={selectedPart || undefined}
-                onComplete={handleQuizComplete}
-                onExit={() => setView(ViewState.DASHBOARD)}
-                onProgressUpdate={handleProgressUpdate}
-                progress={progress}
-             />
-        </div>
+       <div className="min-h-screen flex items-center justify-center bg-gray-50">
+          <div className="flex flex-col items-center">
+            <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-4"></div>
+            <p className="text-gray-500">Syncing your progress...</p>
+          </div>
+       </div>
     );
   }
 
-  return <div>Unknown View</div>;
+  return (
+    <div className="min-h-screen bg-[#f8fafc]">
+      {/* Header Bar */}
+      {view !== ViewState.QUIZ && (
+         <header className="bg-white border-b border-gray-200 px-6 py-4 mb-4">
+             <div className="max-w-6xl mx-auto flex justify-between items-center">
+                 <div className="font-bold text-xl text-blue-600 tracking-tight cursor-pointer" onClick={() => setView(ViewState.DASHBOARD)}>
+                    AceAcademia
+                 </div>
+                 {user && (
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <div className="w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold">
+                            {user.username.charAt(0).toUpperCase()}
+                        </div>
+                        <span className="hidden sm:inline">{user.username}</span>
+                    </div>
+                 )}
+             </div>
+         </header>
+      )}
+
+      {view === ViewState.DASHBOARD && renderDashboard()}
+      {view === ViewState.YEAR_SELECT && renderYearSelect()}
+      {view === ViewState.MODE_SELECT && renderModeSelect()}
+      {view === ViewState.PRACTICE_LIST && renderPracticeList()}
+      {view === ViewState.RESULT && renderResult()}
+      
+      {view === ViewState.QUIZ && selectedCourse && selectedYear && selectedMode && (
+        <div className="p-4">
+          <Quiz
+            courseId={selectedCourse}
+            year={selectedYear}
+            mode={selectedMode}
+            part={selectedPart || undefined}
+            onComplete={handleQuizComplete}
+            onExit={handleQuizExit}
+            onProgressUpdate={handleUpdateProgress}
+            progress={progress}
+          />
+        </div>
+      )}
+
+      {view === ViewState.ADMIN && (
+        <AdminUpload onBack={() => setView(ViewState.DASHBOARD)} />
+      )}
+
+      {view === ViewState.PROFILE && user && (
+        <ProfileDashboard 
+            user={user}
+            progress={progress}
+            onBack={() => setView(ViewState.DASHBOARD)}
+            onUpdateUser={(u) => setUser(u)}
+            onResetProgress={() => setProgress(initialProgress)}
+        />
+      )}
+    </div>
+  );
 }
 
 export default App;

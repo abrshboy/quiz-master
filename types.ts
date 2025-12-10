@@ -13,7 +13,8 @@ export enum ViewState {
   MODE_SELECT = 'MODE_SELECT',
   PRACTICE_LIST = 'PRACTICE_LIST',
   QUIZ = 'QUIZ',
-  RESULT = 'RESULT'
+  RESULT = 'RESULT',
+  ADMIN = 'ADMIN'
 }
 
 export enum QuizMode {
@@ -59,5 +60,5 @@ export const COURSES = [
 export const YEARS = [2015, 2016, 2017, 2018];
 export const PRACTICE_PARTS_COUNT = 10;
 export const PRACTICE_QUESTIONS_PER_PART = 10;
-export const EXAM_QUESTIONS_COUNT = 100; // In a real scenario, fetching 100 takes time, but we simulate logic.
+export const EXAM_QUESTIONS_COUNT = 100; 
 export const PASSING_SCORE = 51;

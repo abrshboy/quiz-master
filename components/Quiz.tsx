@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { QuizMode, Question, UserProgress, PASSING_SCORE } from '../types';
-import { generateQuestions } from '../services/geminiService';
+import { fetchQuestions } from '../services/questionService';
 import { Icons } from './Icons';
 import { updateSessionLocal, clearSessionLocal } from '../services/progressService';
 
@@ -28,6 +28,7 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   const [loading, setLoading] = useState(true);
   const [timeLeft, setTimeLeft] = useState(0);
   const [isSubmitted, setIsSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   
@@ -38,6 +39,7 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   useEffect(() => {
     const initQuiz = async () => {
       setLoading(true);
+      setError(null);
 
       const saved = progress.savedSessions[sessionKey];
       
@@ -49,18 +51,24 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
         setLoading(false);
       } else {
         try {
-          const fetchedQuestions = await generateQuestions(
+          const fetchedQuestions = await fetchQuestions(
             courseId, 
             year, 
             mode, 
-            part, 
-            mode === QuizMode.EXAM ? 100 : 10
+            part
           );
-          setQuestions(fetchedQuestions);
-          const initialTime = mode === QuizMode.EXAM ? 6000 : 600;
-          setTimeLeft(initialTime);
+
+          if (fetchedQuestions.length === 0) {
+            setError("No questions found for this selection. Please contact the administrator.");
+          } else {
+            setQuestions(fetchedQuestions);
+            // Default time: 1 min per question for Practice, or custom logic
+            const timePerQuestion = 60; 
+            setTimeLeft(fetchedQuestions.length * timePerQuestion);
+          }
         } catch (err) {
           console.error("Failed to load quiz", err);
+          setError("Failed to load questions. Please check your connection.");
         } finally {
           setLoading(false);
         }
@@ -140,7 +148,7 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     });
 
     const total = questions.length;
-    const scorePercentage = (correctCount / total) * 100;
+    const scorePercentage = total > 0 ? (correctCount / total) * 100 : 0;
     const passed = scorePercentage >= PASSING_SCORE;
 
     const updatedProgress = clearSessionLocal(sessionKey, progress);
@@ -153,7 +161,20 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     return (
       <div className="flex flex-col items-center justify-center h-96">
         <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-600 mb-4"></div>
-        <p className="text-gray-500 font-medium">Generating Questions via AI...</p>
+        <p className="text-gray-500 font-medium">Loading Questions...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="flex flex-col items-center justify-center h-96 text-center p-6">
+        <Icons.XCircle className="w-16 h-16 text-red-400 mb-4" />
+        <h3 className="text-xl font-bold text-gray-800 mb-2">Oops!</h3>
+        <p className="text-gray-600 mb-6">{error}</p>
+        <button onClick={onExit} className="bg-blue-600 text-white px-6 py-2 rounded-lg hover:bg-blue-700 transition">
+          Go Back
+        </button>
       </div>
     );
   }

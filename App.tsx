@@ -13,6 +13,7 @@ import {
 import { Icons } from './components/Icons';
 import Quiz from './components/Quiz';
 import { AuthView } from './components/AuthView';
+import { AdminUpload } from './components/AdminUpload';
 import { 
   getUserProgress, 
   saveUserProgress, 
@@ -21,6 +22,9 @@ import {
   initialProgress
 } from './services/progressService';
 import { supabase } from './services/supabaseClient';
+
+// Replace with your preferred admin email or remove check to allow all authenticated users
+const ADMIN_EMAIL = 'admin@aceacademia.com';
 
 function App() {
   const [view, setView] = useState<ViewState>(ViewState.AUTH);
@@ -159,9 +163,19 @@ function App() {
              <h1 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back, {user?.username}</h1>
              <p className="text-gray-500">Select a course to continue your studies.</p>
         </div>
-        <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 flex items-center gap-1 transition-colors px-4 py-2 rounded-lg hover:bg-gray-100">
-            <Icons.LogOut className="w-4 h-4" /> Sign Out
-        </button>
+        <div className="flex gap-3">
+          {user?.email === ADMIN_EMAIL && (
+            <button 
+              onClick={() => setView(ViewState.ADMIN)}
+              className="text-sm bg-gray-800 text-white hover:bg-black transition-colors px-4 py-2 rounded-lg font-medium shadow-md"
+            >
+              Admin Dashboard
+            </button>
+          )}
+          <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 flex items-center gap-1 transition-colors px-4 py-2 rounded-lg hover:bg-gray-100">
+              <Icons.LogOut className="w-4 h-4" /> Sign Out
+          </button>
+        </div>
       </div>
       
       {loadingProgress ? (
@@ -364,6 +378,7 @@ function App() {
   if (view === ViewState.MODE_SELECT) return renderModeSelect();
   if (view === ViewState.PRACTICE_LIST) return renderPracticeList();
   if (view === ViewState.RESULT) return renderResult();
+  if (view === ViewState.ADMIN) return <AdminUpload onBack={() => setView(ViewState.DASHBOARD)} />;
   if (view === ViewState.QUIZ) {
     return (
         <div className="p-4 md:p-6 min-h-screen">

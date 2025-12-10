@@ -1,3 +1,4 @@
+
 import { UserProgress, SavedSession } from '../types';
 import { supabase } from './supabaseClient';
 
@@ -6,7 +7,10 @@ export const initialProgress: UserProgress = {
   unlockedPracticeParts: { 2015: 1 },
   completedExams: [],
   practiceScores: {},
-  savedSessions: {}
+  savedSessions: {},
+  streak: 0,
+  lastLoginDate: new Date().toISOString(),
+  totalXp: 0
 };
 
 export const getUserProgress = async (userId: string): Promise<UserProgress> => {
@@ -31,7 +35,25 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
     }
 
     if (data) {
-      return data.data as UserProgress;
+      const progress = data.data as UserProgress;
+      
+      // Calculate Streak on Load
+      const lastLogin = new Date(progress.lastLoginDate || new Date().toISOString());
+      const today = new Date();
+      const diffTime = Math.abs(today.getTime() - lastLogin.getTime());
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+
+      let newStreak = progress.streak || 0;
+      
+      // If same day, keep streak. If 1 day diff, increment. If >1 day, reset.
+      // Logic handled in updateStreak function below, but we verify here for display
+      
+      return {
+          ...progress,
+          // Ensure new fields exist if migrating old data
+          streak: progress.streak || 0,
+          totalXp: progress.totalXp || 0
+      };
     }
 
     return initialProgress;
@@ -39,6 +61,35 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
     console.error('Unexpected error fetching progress:', err);
     return initialProgress;
   }
+};
+
+export const updateStreak = (progress: UserProgress): UserProgress => {
+    const today = new Date();
+    const lastLogin = new Date(progress.lastLoginDate);
+    
+    // Reset hours to compare just dates
+    today.setHours(0,0,0,0);
+    lastLogin.setHours(0,0,0,0);
+    
+    const diffTime = Math.abs(today.getTime() - lastLogin.getTime());
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    
+    let newStreak = progress.streak;
+
+    if (diffDays === 1) {
+        newStreak += 1; // Consecutive day
+    } else if (diffDays > 1) {
+        newStreak = 1; // Broken streak, restart (1 because it's today)
+    } else if (progress.streak === 0) {
+        newStreak = 1; // First day
+    }
+    // If diffDays === 0, same day, do nothing to streak
+
+    return {
+        ...progress,
+        streak: newStreak,
+        lastLoginDate: new Date().toISOString()
+    };
 };
 
 export const saveUserProgress = async (userId: string, progress: UserProgress) => {

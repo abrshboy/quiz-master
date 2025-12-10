@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useRef } from 'react';
 import { QuizMode, Question, UserProgress, PASSING_SCORE } from '../types';
 import { fetchQuestions } from '../services/questionService';
@@ -29,11 +30,60 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   const [timeLeft, setTimeLeft] = useState(0);
   const [isSubmitted, setIsSubmitted] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showConfetti, setShowConfetti] = useState(false);
   
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   
   const showFeedback = mode === QuizMode.PRACTICE;
   const sessionKey = `${courseId}-${year}-${mode}-${part || 'full'}`;
+
+  // Confetti Animation Logic
+  useEffect(() => {
+    if (showConfetti && canvasRef.current) {
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const particles: any[] = [];
+        const colors = ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'];
+
+        for (let i = 0; i < 200; i++) {
+            particles.push({
+                x: Math.random() * canvas.width,
+                y: Math.random() * canvas.height - canvas.height,
+                vx: Math.random() * 4 - 2,
+                vy: Math.random() * 4 + 2,
+                color: colors[Math.floor(Math.random() * colors.length)],
+                size: Math.random() * 5 + 2
+            });
+        }
+
+        const animate = () => {
+            if (!ctx) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            let active = false;
+            particles.forEach(p => {
+                p.x += p.vx;
+                p.y += p.vy;
+                if (p.y < canvas.height) active = true;
+                
+                ctx.fillStyle = p.color;
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+            if (active && showConfetti) requestAnimationFrame(animate);
+        };
+        animate();
+        
+        const timeout = setTimeout(() => setShowConfetti(false), 5000);
+        return () => clearTimeout(timeout);
+    }
+  }, [showConfetti]);
 
   // Initialize Quiz
   useEffect(() => {
@@ -153,15 +203,18 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
 
     const updatedProgress = clearSessionLocal(sessionKey, progress);
     onProgressUpdate(updatedProgress);
+    
+    if (passed) setShowConfetti(true);
 
+    // Small delay to show confetti before transitioning if needed, currently instant
     onComplete(scorePercentage, passed);
   };
 
   if (loading) {
     return (
       <div className="flex flex-col items-center justify-center h-96">
-        <div className="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-600 mb-4"></div>
-        <p className="text-gray-500 font-medium">Loading Questions...</p>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-4 border-b-4 border-blue-600 mb-4"></div>
+        <p className="text-gray-500 font-medium">Preparing your quiz...</p>
       </div>
     );
   }
@@ -185,66 +238,62 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   const progressPercent = ((currentQuestionIndex + 1) / questions.length) * 100;
 
   return (
-    <div className="max-w-3xl mx-auto">
-      {/* Header */}
-      <div className="bg-white rounded-xl shadow-md shadow-gray-200/50 p-5 mb-6 sticky top-4 z-20 border border-gray-100 backdrop-blur-md bg-opacity-95">
-        <div className="flex justify-between items-center mb-4">
-          <div className="flex items-center space-x-4">
-            <button onClick={onExit} className="text-gray-500 hover:text-red-500 transition-colors flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-lg hover:bg-red-50">
-              <Icons.LogOut className="w-4 h-4" /> Exit
-            </button>
-            <div className="h-6 w-px bg-gray-200"></div>
-            <span className="text-gray-700 font-semibold text-sm tracking-wide">
-              QUESTION <span className="text-blue-600 text-base ml-1">{currentQuestionIndex + 1}</span> / {questions.length}
-            </span>
-          </div>
-          
-          <div className={`flex items-center space-x-2 px-4 py-1.5 rounded-full border ${timeLeft < 60 ? 'bg-red-50 border-red-100 text-red-600 animate-pulse' : 'bg-blue-50 border-blue-100 text-blue-600'}`}>
-            <Icons.Clock className="w-4 h-4" />
-            <span className="font-mono font-bold text-lg">{formatTime(timeLeft)}</span>
-          </div>
-        </div>
+    <div className="max-w-4xl mx-auto relative">
+      {showConfetti && <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-50" />}
+      
+      {/* Quiz Header */}
+      <div className="bg-white/80 backdrop-blur-md sticky top-0 z-20 px-4 py-3 border-b border-gray-100 mb-6 rounded-b-2xl shadow-sm">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 max-w-4xl mx-auto">
+             <div className="flex items-center gap-4">
+                <button onClick={onExit} className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-lg">
+                    <Icons.LogOut className="w-5 h-5" />
+                </button>
+                <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-gray-400 tracking-wider uppercase">Question {currentQuestionIndex + 1} of {questions.length}</span>
+                    <div className="w-32 h-1.5 bg-gray-100 rounded-full mt-1 overflow-hidden">
+                        <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${progressPercent}%` }}></div>
+                    </div>
+                </div>
+            </div>
 
-        {/* Enhanced Progress Bar */}
-        <div className="w-full bg-gray-100 rounded-full h-3 overflow-hidden shadow-inner border border-gray-200">
-          <div 
-            className="bg-gradient-to-r from-blue-500 to-indigo-600 h-full rounded-full transition-all duration-700 ease-out shadow-[0_0_10px_rgba(59,130,246,0.5)] relative" 
-            style={{ width: `${progressPercent}%` }}
-          >
-              <div className="absolute top-0 right-0 bottom-0 w-full bg-white opacity-10 animate-pulse"></div>
-          </div>
+             <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${timeLeft < 60 ? 'bg-red-50 border-red-100 text-red-600 animate-pulse' : 'bg-gray-50 border-gray-100 text-gray-700'}`}>
+                <Icons.Clock className="w-4 h-4" />
+                <span className="font-mono font-bold text-lg">{formatTime(timeLeft)}</span>
+            </div>
         </div>
       </div>
 
       {/* Question Card */}
-      <div className="bg-white rounded-2xl shadow-xl p-6 md:p-10 mb-6 border border-gray-100 transition-all duration-300">
-        <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-8 leading-relaxed">
+      <div className="bg-white rounded-3xl shadow-lg border border-gray-100 p-6 md:p-10 mb-24 md:mb-8 animate-fade-in relative overflow-hidden">
+        {/* Background Decorative Element */}
+        <div className="absolute top-0 right-0 w-32 h-32 bg-blue-50 rounded-bl-full -mr-16 -mt-16 opacity-50 pointer-events-none"></div>
+
+        <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-8 leading-relaxed relative z-10">
           {currentQuestion?.text}
         </h2>
 
-        <div className="space-y-4">
+        <div className="space-y-3 relative z-10">
           {currentQuestion?.options.map((option, idx) => {
             const isSelected = answers[currentQuestionIndex] === idx;
             const isCorrect = currentQuestion.correctAnswerIndex === idx;
             
-            let buttonClass = "w-full text-left p-4 rounded-xl border-2 transition-all duration-200 ease-out flex justify-between items-center group relative overflow-hidden ";
+            let buttonClass = "w-full text-left p-4 md:p-5 rounded-xl border transition-all duration-200 ease-out flex items-start gap-4 group ";
             
             if (showFeedback && isAnswered) {
               if (isSelected && isCorrect) {
-                buttonClass += "border-green-500 bg-green-50 text-green-900 shadow-sm";
+                buttonClass += "border-green-500 bg-green-50/50 text-green-900";
               } else if (isSelected && !isCorrect) {
-                buttonClass += "border-red-500 bg-red-50 text-red-900 shadow-sm";
+                buttonClass += "border-red-500 bg-red-50/50 text-red-900";
               } else if (!isSelected && isCorrect) {
-                 buttonClass += "border-green-200 bg-white text-green-700 opacity-90"; 
+                 buttonClass += "border-green-300 bg-white text-green-700 ring-1 ring-green-200"; 
               } else {
-                buttonClass += "border-gray-100 bg-gray-50 text-gray-400 opacity-50";
+                buttonClass += "border-gray-100 bg-gray-50 text-gray-400";
               }
             } else {
-               // Normal Interactive State with Hover
                if (isSelected) {
-                 buttonClass += "border-blue-500 bg-blue-50 text-blue-800 shadow-md scale-[1.005] z-10";
+                 buttonClass += "border-blue-500 bg-blue-50/50 text-blue-900 shadow-sm ring-1 ring-blue-200";
                } else {
-                 buttonClass += "border-gray-100 bg-white hover:border-blue-300 hover:bg-blue-50/30 hover:shadow-lg hover:-translate-y-0.5 text-gray-700";
+                 buttonClass += "border-gray-200 bg-white hover:border-blue-300 hover:bg-blue-50/30 hover:shadow-md text-gray-700";
                }
             }
 
@@ -255,58 +304,60 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
                 disabled={showFeedback && isAnswered}
                 className={buttonClass}
               >
-                <div className="flex items-center gap-4 z-10 relative">
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-bold border-2 transition-all duration-300 ${
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5 transition-colors ${
                         isSelected 
-                        ? (showFeedback && !isCorrect ? 'border-red-500 bg-red-500 text-white' : 'border-blue-500 bg-blue-500 text-white') 
-                        : 'border-gray-200 text-gray-400 bg-gray-50 group-hover:border-blue-400 group-hover:text-blue-500 group-hover:bg-white'
+                        ? (showFeedback && !isCorrect ? 'bg-red-500 text-white' : 'bg-blue-600 text-white') 
+                        : 'bg-gray-100 text-gray-500 group-hover:bg-blue-200 group-hover:text-blue-700'
                     }`}>
                         {String.fromCharCode(65 + idx)}
-                    </div>
-                    <span className="font-medium text-lg">{option}</span>
                 </div>
+                <span className="font-medium text-base md:text-lg">{option}</span>
                 
-                {showFeedback && isAnswered && isCorrect && (
-                   <Icons.CheckCircle className="w-6 h-6 text-green-500 animate-fade-in" />
-                )}
-                {showFeedback && isAnswered && isSelected && !isCorrect && (
-                   <Icons.XCircle className="w-6 h-6 text-red-500 animate-fade-in" />
-                )}
+                <div className="ml-auto">
+                    {showFeedback && isAnswered && isCorrect && (
+                       <Icons.CheckCircle className="w-5 h-5 text-green-500 animate-fade-in" />
+                    )}
+                    {showFeedback && isAnswered && isSelected && !isCorrect && (
+                       <Icons.XCircle className="w-5 h-5 text-red-500 animate-fade-in" />
+                    )}
+                </div>
               </button>
             );
           })}
         </div>
       </div>
 
-      {/* Navigation */}
-      <div className="flex justify-between items-center">
-        <button
-          onClick={handlePrev}
-          disabled={currentQuestionIndex === 0}
-          className={`px-6 py-3 rounded-xl font-medium flex items-center transition-all duration-200 ${
-            currentQuestionIndex === 0 
-            ? 'text-gray-300 cursor-not-allowed bg-gray-50' 
-            : 'bg-white text-gray-700 hover:bg-gray-50 hover:shadow-md border border-gray-200 hover:-translate-y-0.5'
-          }`}
-        >
-          Previous
-        </button>
-
-        {!isLastQuestion ? (
-          <button
-            onClick={handleNext}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-all duration-200 transform hover:-translate-y-1 active:translate-y-0"
-          >
-            Next Question
-          </button>
-        ) : (
-          <button
-            onClick={handleSubmit}
-            className="bg-green-600 hover:bg-green-700 text-white px-8 py-3 rounded-xl font-semibold shadow-lg shadow-green-200 transition-all duration-200 transform hover:-translate-y-1 active:translate-y-0"
-          >
-            Submit Exam
-          </button>
-        )}
+      {/* Footer Navigation */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white border-t border-gray-100 p-4 md:static md:bg-transparent md:border-0 md:p-0 z-30">
+          <div className="max-w-4xl mx-auto flex justify-between items-center">
+            <button
+              onClick={handlePrev}
+              disabled={currentQuestionIndex === 0}
+              className={`px-5 py-2.5 rounded-xl font-medium flex items-center gap-2 transition-all ${
+                currentQuestionIndex === 0 
+                ? 'text-gray-300 cursor-not-allowed' 
+                : 'text-gray-600 hover:bg-gray-100 hover:text-gray-900'
+              }`}
+            >
+              <Icons.ChevronLeft className="w-5 h-5" /> Previous
+            </button>
+    
+            {!isLastQuestion ? (
+              <button
+                onClick={handleNext}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-transform active:scale-95 flex items-center gap-2"
+              >
+                Next <Icons.ChevronLeft className="w-4 h-4 rotate-180" />
+              </button>
+            ) : (
+              <button
+                onClick={handleSubmit}
+                className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-semibold shadow-lg transition-transform active:scale-95"
+              >
+                Submit Exam
+              </button>
+            )}
+          </div>
       </div>
     </div>
   );

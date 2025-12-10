@@ -1,3 +1,4 @@
+
 export enum CourseId {
   MANAGEMENT = 'management',
   MARKETING = 'marketing',
@@ -36,6 +37,11 @@ export interface UserProgress {
   completedExams: number[]; // Years where exam is passed
   practiceScores: Record<string, number>; // key: "year-part", value: score
   savedSessions: Record<string, SavedSession>; // key: "year-mode-part"
+  
+  // New Gamification Fields
+  streak: number;
+  lastLoginDate: string; // ISO Date string
+  totalXp: number; // Experience points based on correct answers
 }
 
 export interface SavedSession {
@@ -52,11 +58,11 @@ export interface User {
 }
 
 export const COURSES = [
-  { id: CourseId.MANAGEMENT, title: 'Management', icon: 'Briefcase', active: true },
-  { id: CourseId.MARKETING, title: 'Marketing', icon: 'Megaphone', active: false },
-  { id: CourseId.ACCOUNTING, title: 'Accounting', icon: 'Calculator', active: false },
-  { id: CourseId.CS, title: 'Computer Science', icon: 'Cpu', active: false },
-  { id: CourseId.ARCHITECTURE, title: 'Architecture', icon: 'Ruler', active: false },
+  { id: CourseId.MANAGEMENT, title: 'Management', icon: 'Briefcase', active: true, color: 'text-blue-600 bg-blue-100' },
+  { id: CourseId.MARKETING, title: 'Marketing', icon: 'Megaphone', active: false, color: 'text-pink-600 bg-pink-100' },
+  { id: CourseId.ACCOUNTING, title: 'Accounting', icon: 'Calculator', active: false, color: 'text-emerald-600 bg-emerald-100' },
+  { id: CourseId.CS, title: 'Computer Science', icon: 'Cpu', active: false, color: 'text-purple-600 bg-purple-100' },
+  { id: CourseId.ARCHITECTURE, title: 'Architecture', icon: 'Ruler', active: false, color: 'text-orange-600 bg-orange-100' },
 ];
 
 export const YEARS = [2015, 2016, 2017, 2018];

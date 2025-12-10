@@ -9,7 +9,8 @@ import {
   QuizMode, 
   PRACTICE_PARTS_COUNT, 
   UserProgress,
-  PASSING_SCORE
+  PASSING_SCORE,
+  EXAM_QUESTIONS_COUNT
 } from './types';
 import { Icons } from './components/Icons';
 import Quiz from './components/Quiz';
@@ -17,6 +18,7 @@ import { Dashboard } from './components/Dashboard';
 import { AuthView } from './components/AuthView';
 import { AdminUpload } from './components/AdminUpload';
 import { ProfileDashboard } from './components/ProfileDashboard';
+import { Leaderboard } from './components/Leaderboard';
 import { 
   getUserProgress, 
   saveUserProgress, 
@@ -24,7 +26,8 @@ import {
   unlockNextPartLocal,
   initialProgress,
   updateStreak,
-  logActivity
+  logActivity,
+  syncLeaderboardStats
 } from './services/progressService';
 import { supabase } from './services/supabaseClient';
 
@@ -45,6 +48,8 @@ function App() {
   
   // Result State
   const [lastScore, setLastScore] = useState<{score: number, passed: boolean} | null>(null);
+  // Track time for leaderboard
+  const [quizStartTime, setQuizStartTime] = useState<number>(0);
 
   // Initialize Auth Listener
   useEffect(() => {
@@ -91,7 +96,11 @@ function App() {
     try {
         let loadedProgress = await getUserProgress(newUser.id);
         loadedProgress = updateStreak(loadedProgress);
+        
+        // Sync streak update immediately
         await saveUserProgress(newUser.id, loadedProgress);
+        await syncLeaderboardStats(newUser.id, newUser.username, loadedProgress);
+        
         setProgress(loadedProgress);
     } catch (e) {
         console.error("Failed to load progress", e);
@@ -127,6 +136,7 @@ function App() {
 
   const handleModeSelect = (mode: QuizMode) => {
     setSelectedMode(mode);
+    setQuizStartTime(Date.now()); // Start timing
     if (mode === QuizMode.PRACTICE) {
       setView(ViewState.PRACTICE_LIST);
     } else {
@@ -139,23 +149,23 @@ function App() {
       const maxPart = progress.unlockedPracticeParts[selectedYear] || 1;
       if (part <= maxPart) {
         setSelectedPart(part);
+        setQuizStartTime(Date.now()); // Start timing for practice part
         setView(ViewState.QUIZ);
       }
     }
   };
 
   const handleStartDailyChallenge = () => {
-    // We use the first course as default for daily questions or random
     setSelectedCourse(COURSES[0].id);
-    // Dummy year for compatibility, question service will ignore it for daily challenge if configured right
-    // or we fetch explicitly
     setSelectedYear(2015); 
     setSelectedMode(QuizMode.DAILY_CHALLENGE);
+    setQuizStartTime(Date.now());
     setView(ViewState.QUIZ);
   };
 
   const handleQuizComplete = async (score: number, passed: boolean) => {
     setLastScore({ score, passed });
+    const timeTakenSeconds = Math.floor((Date.now() - quizStartTime) / 1000);
     
     let newProgress = { ...progress };
     let xpGained = 0;
@@ -167,10 +177,21 @@ function App() {
         activityDesc = `Completed Daily Challenge`;
         activityType = 'DAILY_CHALLENGE';
         newProgress.dailyChallengeLastCompleted = new Date().toISOString();
-        // Daily challenge always contributes to streak if not already updated today (handled in load, but good to ensure)
         newProgress = updateStreak(newProgress); 
 
     } else if (selectedMode === QuizMode.EXAM) {
+        // High score logic for Leaderboard
+        const currentHighScore = newProgress.highestExamScore || 0;
+        if (score > currentHighScore) {
+            newProgress.highestExamScore = score;
+        }
+
+        // Speed logic for Leaderboard
+        const currentBestTime = newProgress.fastestExamTime || 99999;
+        if (passed && timeTakenSeconds < currentBestTime) {
+            newProgress.fastestExamTime = timeTakenSeconds;
+        }
+
         if (passed) {
             xpGained = 150;
             activityDesc = `Passed ${selectedYear} Exam`;
@@ -198,10 +219,15 @@ function App() {
         }
     }
 
-    // Log the activity and add XP
+    // Log local activity
     newProgress = logActivity(newProgress, activityType, activityDesc, xpGained);
 
+    // Save and Sync to Leaderboard
     await handleUpdateProgress(newProgress);
+    if (user) {
+        await syncLeaderboardStats(user.id, user.username, newProgress, { type: activityType, xp: xpGained });
+    }
+
     setView(ViewState.RESULT);
   };
 
@@ -464,6 +490,13 @@ function App() {
                       </button>
                       
                        <button 
+                        onClick={() => { setView(ViewState.LEADERBOARD); setSidebarOpen(false); }}
+                        className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-medium transition-all duration-200 ${view === ViewState.LEADERBOARD ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}`}
+                      >
+                          <Icons.Trophy className="w-5 h-5" /> Leaderboard
+                      </button>
+
+                       <button 
                         onClick={() => { setView(ViewState.PROFILE); setSidebarOpen(false); }}
                         className={`w-full flex items-center gap-3 px-4 py-3.5 rounded-xl font-medium transition-all duration-200 ${view === ViewState.PROFILE ? 'bg-blue-50 text-blue-700 shadow-sm' : 'text-gray-600 hover:bg-gray-50 hover:text-gray-900'}`}
                       >
@@ -520,6 +553,13 @@ function App() {
                     onSelectCourse={handleCourseSelect}
                     onNavigate={(v) => setView(v)}
                     onStartDailyChallenge={handleStartDailyChallenge}
+                />
+            )}
+            
+            {view === ViewState.LEADERBOARD && user && (
+                <Leaderboard 
+                    currentUser={user}
+                    onBack={() => setView(ViewState.DASHBOARD)}
                 />
             )}
             

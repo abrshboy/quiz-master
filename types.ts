@@ -16,7 +16,8 @@ export enum ViewState {
   QUIZ = 'QUIZ',
   RESULT = 'RESULT',
   ADMIN = 'ADMIN',
-  PROFILE = 'PROFILE'
+  PROFILE = 'PROFILE',
+  LEADERBOARD = 'LEADERBOARD'
 }
 
 export enum QuizMode {
@@ -53,6 +54,21 @@ export interface UserProgress {
   totalXp: number; // Experience points based on correct answers
   recentActivities: Activity[];
   dailyChallengeLastCompleted: string | null; // ISO Date of last completed daily challenge
+  
+  // Leaderboard Metadata (Local cache)
+  department?: string;
+  highestExamScore?: number;
+  fastestExamTime?: number; // seconds
+}
+
+export interface LeaderboardEntry {
+  user_id: string;
+  username: string;
+  department: string;
+  total_xp: number;
+  highest_score: number;
+  fastest_exam_time: number;
+  practice_parts_completed: number;
 }
 
 export interface SavedSession {
@@ -74,6 +90,15 @@ export const COURSES = [
   { id: CourseId.ACCOUNTING, title: 'Accounting', icon: 'Calculator', active: false, color: 'text-emerald-600 bg-emerald-100' },
   { id: CourseId.CS, title: 'Computer Science', icon: 'Cpu', active: false, color: 'text-purple-600 bg-purple-100' },
   { id: CourseId.ARCHITECTURE, title: 'Architecture', icon: 'Ruler', active: false, color: 'text-orange-600 bg-orange-100' },
+];
+
+export const DEPARTMENTS = [
+  'General',
+  'Management',
+  'Marketing',
+  'Accounting',
+  'Computer Science',
+  'Architecture'
 ];
 
 export const YEARS = [2015, 2016, 2017, 2018];

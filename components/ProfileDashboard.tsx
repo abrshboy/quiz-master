@@ -1,7 +1,9 @@
+
 import React, { useState } from 'react';
-import { User, UserProgress, YEARS } from '../types';
+import { User, UserProgress, YEARS, DEPARTMENTS } from '../types';
 import { supabase } from '../services/supabaseClient';
 import { resetUserProgress } from '../services/progressService';
+import { syncLeaderboardProfile } from '../services/leaderboardService';
 import { Icons } from './Icons';
 
 interface ProfileDashboardProps {
@@ -27,6 +29,7 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
   
   // Settings Form State
   const [displayName, setDisplayName] = useState(user.username);
+  const [department, setDepartment] = useState(progress.department || 'General');
   
   // Password Form State
   const [newPassword, setNewPassword] = useState('');
@@ -38,11 +41,21 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
     setMessage(null);
 
     try {
-      const { data, error } = await supabase.auth.updateUser({
+      const { error } = await supabase.auth.updateUser({
         data: { full_name: displayName }
       });
 
       if (error) throw error;
+      
+      // Update local storage/DB for department via progress/leaderboard
+      await syncLeaderboardProfile(user.id, displayName, department);
+      
+      // Also update user_progress local part if needed for persistence
+      // We will let App.tsx handle progress state, but we should sync to DB here
+      await supabase.from('user_progress').upsert({
+          user_id: user.id,
+          data: { ...progress, department }
+      });
 
       onUpdateUser({ ...user, username: displayName });
       setMessage({ type: 'success', text: 'Profile updated successfully!' });
@@ -112,7 +125,7 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
           <Icons.User className="w-10 h-10" />
         </div>
         <h3 className="font-bold text-gray-800 text-lg text-center truncate w-full px-2">{user.username}</h3>
-        <p className="text-gray-500 text-xs truncate w-full px-2 text-center">{user.email}</p>
+        <p className="text-gray-500 text-xs truncate w-full px-2 text-center">{department}</p>
       </div>
       
       <nav className="space-y-1">
@@ -217,6 +230,21 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
                     placeholder="Enter your name"
                 />
             </div>
+            
+             <div className="mb-4">
+                <label className="block text-sm font-medium text-gray-700 mb-2">Department</label>
+                <select 
+                    value={department}
+                    onChange={(e) => setDepartment(e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 outline-none"
+                >
+                    {DEPARTMENTS.map(d => (
+                        <option key={d} value={d}>{d}</option>
+                    ))}
+                </select>
+                <p className="text-xs text-gray-500 mt-1">This determines which leaderboard you appear on.</p>
+            </div>
+
              <div className="mb-6">
                 <label className="block text-sm font-medium text-gray-700 mb-2">Email Address</label>
                 <input 

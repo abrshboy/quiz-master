@@ -1,5 +1,5 @@
 
-import { UserProgress, SavedSession, Activity } from '../types';
+import { UserProgress, SavedSession, Activity, LeaderboardEntry } from '../types';
 import { supabase } from './supabaseClient';
 
 export const initialProgress: UserProgress = {
@@ -12,7 +12,10 @@ export const initialProgress: UserProgress = {
   lastLoginDate: new Date().toISOString(),
   totalXp: 0,
   recentActivities: [],
-  dailyChallengeLastCompleted: null
+  dailyChallengeLastCompleted: null,
+  department: 'General',
+  highestExamScore: 0,
+  fastestExamTime: 99999
 };
 
 export const getUserProgress = async (userId: string): Promise<UserProgress> => {
@@ -24,27 +27,23 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
       .single();
 
     if (error) {
-      if (error.code === 'PGRST116') {
-         // No row found, return initial
-         return initialProgress;
-      }
-      if (error.code === '42P01') {
-         console.warn("Supabase table 'user_progress' not found. Please run the provided SQL script.");
-      } else {
-         console.error('Error fetching progress:', error);
-      }
+      if (error.code === 'PGRST116') return initialProgress;
+      if (error.code === '42P01') console.warn("Supabase table 'user_progress' not found.");
       return initialProgress;
     }
 
     if (data) {
       const progress = data.data as UserProgress;
       return {
-          ...initialProgress, // Ensure new fields exist if migrating old data
+          ...initialProgress,
           ...progress,
           streak: progress.streak || 0,
           totalXp: progress.totalXp || 0,
           recentActivities: progress.recentActivities || [],
-          dailyChallengeLastCompleted: progress.dailyChallengeLastCompleted || null
+          dailyChallengeLastCompleted: progress.dailyChallengeLastCompleted || null,
+          department: progress.department || 'General',
+          highestExamScore: progress.highestExamScore || 0,
+          fastestExamTime: progress.fastestExamTime || 99999
       };
     }
 
@@ -71,11 +70,10 @@ export const updateStreak = (progress: UserProgress): UserProgress => {
     if (diffDays === 1) {
         newStreak += 1; // Consecutive day
     } else if (diffDays > 1) {
-        newStreak = 1; // Broken streak, restart (1 because it's today)
+        newStreak = 1; // Broken streak, restart
     } else if (progress.streak === 0) {
-        newStreak = 1; // First day
+        newStreak = 1;
     }
-    // If diffDays === 0, same day, do nothing to streak
 
     return {
         ...progress,
@@ -98,7 +96,6 @@ export const logActivity = (
         xpGained: xp
     };
 
-    // Keep only last 20 activities
     const updatedActivities = [newActivity, ...progress.recentActivities].slice(0, 20);
 
     return {
@@ -106,6 +103,39 @@ export const logActivity = (
         recentActivities: updatedActivities,
         totalXp: (progress.totalXp || 0) + xp
     };
+};
+
+export const syncLeaderboardStats = async (
+    userId: string,
+    username: string,
+    progress: UserProgress,
+    newActivity?: { type: string; xp: number }
+) => {
+    // 1. Insert Activity Log
+    if (newActivity) {
+        await supabase.from('activity_log').insert({
+            user_id: userId,
+            username: username,
+            activity_type: newActivity.type,
+            xp_gained: newActivity.xp
+        });
+    }
+
+    // 2. Upsert Leaderboard Stats
+    const totalPracticeParts = Object.values(progress.unlockedPracticeParts).reduce((a, b) => a + (b - 1), 0);
+
+    const { error } = await supabase.from('leaderboard').upsert({
+        user_id: userId,
+        username: username,
+        department: progress.department || 'General',
+        total_xp: progress.totalXp,
+        highest_score: progress.highestExamScore || 0,
+        fastest_exam_time: progress.fastestExamTime || 99999,
+        practice_parts_completed: totalPracticeParts,
+        updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' });
+
+    if (error) console.error("Failed to sync leaderboard:", error);
 };
 
 export const isDailyChallengeAvailable = (progress: UserProgress): boolean => {
@@ -129,12 +159,8 @@ export const saveUserProgress = async (userId: string, progress: UserProgress) =
         updated_at: new Date().toISOString()
       }, { onConflict: 'user_id' });
 
-    if (error) {
-       if (error.code === '42P01') {
-         console.error("Supabase table 'user_progress' not found. Data cannot be saved until SQL script is run.");
-      } else {
+    if (error && error.code !== '42P01') {
          console.error('Error saving progress:', error);
-      }
     }
   } catch (err) {
     console.error('Unexpected error saving progress:', err);

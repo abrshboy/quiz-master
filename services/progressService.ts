@@ -63,6 +63,11 @@ export const saveUserProgress = async (userId: string, progress: UserProgress) =
   }
 };
 
+export const resetUserProgress = async (userId: string): Promise<void> => {
+    // Reset by saving the initial state over the existing state
+    await saveUserProgress(userId, initialProgress);
+};
+
 // Helper to update local progress object for logic before saving
 export const unlockNextYearLocal = (currentYear: number, progress: UserProgress): UserProgress => {
   const nextYear = currentYear + 1;

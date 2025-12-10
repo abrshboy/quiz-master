@@ -14,7 +14,8 @@ export enum ViewState {
   PRACTICE_LIST = 'PRACTICE_LIST',
   QUIZ = 'QUIZ',
   RESULT = 'RESULT',
-  ADMIN = 'ADMIN'
+  ADMIN = 'ADMIN',
+  PROFILE = 'PROFILE'
 }
 
 export enum QuizMode {
@@ -45,7 +46,8 @@ export interface SavedSession {
 }
 
 export interface User {
-  username: string;
+  id: string;
+  username: string; // This is the Display Name
   email: string;
 }
 

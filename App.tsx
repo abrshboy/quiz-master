@@ -14,6 +14,7 @@ import { Icons } from './components/Icons';
 import Quiz from './components/Quiz';
 import { AuthView } from './components/AuthView';
 import { AdminUpload } from './components/AdminUpload';
+import { ProfileDashboard } from './components/ProfileDashboard';
 import { 
   getUserProgress, 
   saveUserProgress, 
@@ -77,7 +78,14 @@ function App() {
   }, []); // Empty dependency array intentional
 
   const handleUserSession = async (supabaseUser: any) => {
-    setUser({ username: supabaseUser.email?.split('@')[0] || 'Student', email: supabaseUser.email! });
+    // Check for display name in metadata, fallback to email username
+    const displayName = supabaseUser.user_metadata?.full_name || supabaseUser.email?.split('@')[0] || 'Student';
+    
+    setUser({ 
+        id: supabaseUser.id,
+        username: displayName, 
+        email: supabaseUser.email! 
+    });
     
     // Only fetch progress if we don't have it or if the user changed
     setLoadingProgress(true);
@@ -85,7 +93,8 @@ function App() {
     setProgress(data);
     setLoadingProgress(false);
     
-    setView(ViewState.DASHBOARD);
+    // If we were on auth page, go to dashboard. Otherwise stay put (e.g. reload)
+    setView(v => v === ViewState.AUTH ? ViewState.DASHBOARD : v);
   };
 
   const handleLogout = async () => {
@@ -127,10 +136,8 @@ function App() {
   // Called by Quiz when it updates session data (intermediate save)
   const handleProgressUpdate = async (newProgress: UserProgress) => {
       setProgress(newProgress);
-      // Debounce saving to DB could be good here, but for now we direct save
-      const currentUser = await supabase.auth.getUser();
-      if (currentUser.data.user) {
-          await saveUserProgress(currentUser.data.user.id, newProgress);
+      if (user?.id) {
+          await saveUserProgress(user.id, newProgress);
       }
   };
 
@@ -153,9 +160,8 @@ function App() {
     setView(ViewState.RESULT);
 
     // Persist
-    const currentUser = await supabase.auth.getUser();
-    if (currentUser.data.user) {
-        await saveUserProgress(currentUser.data.user.id, newProgress);
+    if (user?.id) {
+        await saveUserProgress(user.id, newProgress);
     }
   };
 
@@ -169,7 +175,7 @@ function App() {
 
   const renderDashboard = () => (
     <div className="p-6 max-w-6xl mx-auto">
-      <div className="flex justify-between items-center mb-8">
+      <div className="flex flex-col md:flex-row justify-between items-start md:items-center mb-8 gap-4">
         <div>
              <h1 className="text-3xl font-bold text-gray-800 mb-2">Welcome Back, {user?.username}</h1>
              <p className="text-gray-500">Select a course to continue your studies.</p>
@@ -180,9 +186,15 @@ function App() {
               onClick={() => setView(ViewState.ADMIN)}
               className="text-sm bg-gray-800 text-white hover:bg-black transition-colors px-4 py-2 rounded-lg font-medium shadow-md"
             >
-              Admin Dashboard
+              Admin
             </button>
           )}
+          <button 
+            onClick={() => setView(ViewState.PROFILE)}
+            className="text-sm bg-white border border-gray-200 text-gray-700 hover:bg-gray-50 flex items-center gap-2 transition-colors px-4 py-2 rounded-lg font-medium shadow-sm"
+          >
+              <Icons.User className="w-4 h-4" /> Profile
+          </button>
           <button onClick={handleLogout} className="text-sm text-gray-500 hover:text-red-500 flex items-center gap-1 transition-colors px-4 py-2 rounded-lg hover:bg-gray-100">
               <Icons.LogOut className="w-4 h-4" /> Sign Out
           </button>
@@ -390,6 +402,17 @@ function App() {
   if (view === ViewState.PRACTICE_LIST) return renderPracticeList();
   if (view === ViewState.RESULT) return renderResult();
   if (view === ViewState.ADMIN) return <AdminUpload onBack={() => setView(ViewState.DASHBOARD)} />;
+  if (view === ViewState.PROFILE && user) {
+      return (
+          <ProfileDashboard 
+            user={user} 
+            progress={progress} 
+            onBack={() => setView(ViewState.DASHBOARD)}
+            onUpdateUser={setUser}
+            onResetProgress={() => setProgress(initialProgress)}
+          />
+      );
+  }
   if (view === ViewState.QUIZ) {
     return (
         <div className="p-4 md:p-6 min-h-screen">

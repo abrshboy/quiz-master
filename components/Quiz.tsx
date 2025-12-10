@@ -32,6 +32,10 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   const [error, setError] = useState<string | null>(null);
   const [showConfetti, setShowConfetti] = useState(false);
   
+  // Navigation & Review Features
+  const [flagged, setFlagged] = useState<Set<number>>(new Set());
+  const [isMapOpen, setIsMapOpen] = useState(false);
+  
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
@@ -180,10 +184,30 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     }
   };
 
+  const handleSkip = () => {
+    // Just move next without forcing an answer (functionally same as next but separated for UX)
+    handleNext();
+  };
+
   const handlePrev = () => {
     if (currentQuestionIndex > 0) {
       setCurrentQuestionIndex(prev => prev - 1);
     }
+  };
+  
+  const toggleFlag = () => {
+      const newFlagged = new Set(flagged);
+      if (newFlagged.has(currentQuestionIndex)) {
+          newFlagged.delete(currentQuestionIndex);
+      } else {
+          newFlagged.add(currentQuestionIndex);
+      }
+      setFlagged(newFlagged);
+  };
+
+  const jumpToQuestion = (index: number) => {
+      setCurrentQuestionIndex(index);
+      setIsMapOpen(false);
   };
 
   const handleSubmit = () => {
@@ -234,6 +258,7 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
 
   const currentQuestion = questions[currentQuestionIndex];
   const isAnswered = answers[currentQuestionIndex] !== undefined;
+  const isFlagged = flagged.has(currentQuestionIndex);
   const isLastQuestion = currentQuestionIndex === questions.length - 1;
   const progressPercent = ((currentQuestionIndex + 1) / questions.length) * 100;
 
@@ -241,24 +266,91 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     <div className="max-w-4xl mx-auto relative">
       {showConfetti && <canvas ref={canvasRef} className="fixed inset-0 pointer-events-none z-50" />}
       
+      {/* Question Map Overlay */}
+      {isMapOpen && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex justify-end animate-fade-in" onClick={() => setIsMapOpen(false)}>
+              <div className="w-full max-w-sm bg-white h-full p-6 overflow-y-auto shadow-2xl" onClick={e => e.stopPropagation()}>
+                  <div className="flex items-center justify-between mb-6">
+                      <h3 className="font-bold text-xl text-gray-800">Question Map</h3>
+                      <button onClick={() => setIsMapOpen(false)} className="p-2 hover:bg-gray-100 rounded-full">
+                          <Icons.X className="w-5 h-5 text-gray-500" />
+                      </button>
+                  </div>
+                  
+                  <div className="grid grid-cols-5 gap-3">
+                      {questions.map((_, idx) => {
+                          const statusAnswered = answers[idx] !== undefined;
+                          const statusFlagged = flagged.has(idx);
+                          const isCurrent = currentQuestionIndex === idx;
+                          
+                          let bgClass = "bg-gray-100 text-gray-600 hover:bg-gray-200";
+                          if (statusFlagged) bgClass = "bg-orange-100 text-orange-600 border border-orange-200";
+                          else if (statusAnswered) bgClass = "bg-blue-100 text-blue-600 border border-blue-200";
+                          
+                          if (isCurrent) bgClass += " ring-2 ring-blue-500 ring-offset-2";
+                          
+                          return (
+                              <button
+                                key={idx}
+                                onClick={() => jumpToQuestion(idx)}
+                                className={`aspect-square rounded-lg font-bold text-sm flex items-center justify-center transition-all ${bgClass}`}
+                              >
+                                {idx + 1}
+                                {statusFlagged && <div className="absolute top-1 right-1 w-2 h-2 bg-orange-500 rounded-full"></div>}
+                              </button>
+                          )
+                      })}
+                  </div>
+                  
+                  <div className="mt-8 border-t border-gray-100 pt-6 space-y-3">
+                       <div className="flex items-center gap-3 text-sm text-gray-600">
+                           <div className="w-4 h-4 rounded bg-blue-100 border border-blue-200"></div> Answered
+                       </div>
+                       <div className="flex items-center gap-3 text-sm text-gray-600">
+                           <div className="w-4 h-4 rounded bg-orange-100 border border-orange-200"></div> Flagged for Review
+                       </div>
+                       <div className="flex items-center gap-3 text-sm text-gray-600">
+                           <div className="w-4 h-4 rounded bg-gray-100"></div> Unanswered
+                       </div>
+                  </div>
+              </div>
+          </div>
+      )}
+      
       {/* Quiz Header */}
       <div className="bg-white/80 backdrop-blur-md sticky top-0 z-20 px-4 py-3 border-b border-gray-100 mb-6 rounded-b-2xl shadow-sm">
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 max-w-4xl mx-auto">
              <div className="flex items-center gap-4">
-                <button onClick={onExit} className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-lg">
+                <button onClick={onExit} className="text-gray-400 hover:text-red-500 transition-colors p-2 hover:bg-red-50 rounded-lg" title="Exit Exam">
                     <Icons.LogOut className="w-5 h-5" />
                 </button>
                 <div className="flex flex-col">
-                    <span className="text-xs font-semibold text-gray-400 tracking-wider uppercase">Question {currentQuestionIndex + 1} of {questions.length}</span>
+                    <div className="flex items-center gap-2">
+                        <span className="text-xs font-semibold text-gray-400 tracking-wider uppercase">Question {currentQuestionIndex + 1} of {questions.length}</span>
+                        <button onClick={() => setIsMapOpen(true)} className="text-blue-500 hover:text-blue-700 text-xs font-bold flex items-center gap-1">
+                            <Icons.Grid className="w-3 h-3" /> View Map
+                        </button>
+                    </div>
                     <div className="w-32 h-1.5 bg-gray-100 rounded-full mt-1 overflow-hidden">
                         <div className="h-full bg-blue-500 transition-all duration-300" style={{ width: `${progressPercent}%` }}></div>
                     </div>
                 </div>
             </div>
+            
+             <div className="flex items-center gap-3">
+                 <button 
+                    onClick={toggleFlag} 
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium transition-colors ${isFlagged ? 'bg-orange-100 text-orange-600' : 'text-gray-400 hover:bg-gray-100'}`}
+                    title="Flag for later review"
+                 >
+                     <Icons.Flag className={`w-4 h-4 ${isFlagged ? 'fill-current' : ''}`} />
+                     <span className="hidden md:inline">{isFlagged ? 'Flagged' : 'Flag'}</span>
+                 </button>
 
-             <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${timeLeft < 60 ? 'bg-red-50 border-red-100 text-red-600 animate-pulse' : 'bg-gray-50 border-gray-100 text-gray-700'}`}>
-                <Icons.Clock className="w-4 h-4" />
-                <span className="font-mono font-bold text-lg">{formatTime(timeLeft)}</span>
+                 <div className={`flex items-center gap-2 px-4 py-2 rounded-xl border ${timeLeft < 60 ? 'bg-red-50 border-red-100 text-red-600 animate-pulse' : 'bg-gray-50 border-gray-100 text-gray-700'}`}>
+                    <Icons.Clock className="w-4 h-4" />
+                    <span className="font-mono font-bold text-lg">{formatTime(timeLeft)}</span>
+                </div>
             </div>
         </div>
       </div>
@@ -341,22 +433,33 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
             >
               <Icons.ChevronLeft className="w-5 h-5" /> Previous
             </button>
-    
-            {!isLastQuestion ? (
-              <button
-                onClick={handleNext}
-                className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-transform active:scale-95 flex items-center gap-2"
-              >
-                Next <Icons.ChevronLeft className="w-4 h-4 rotate-180" />
-              </button>
-            ) : (
-              <button
-                onClick={handleSubmit}
-                className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-semibold shadow-lg transition-transform active:scale-95"
-              >
-                Submit Exam
-              </button>
-            )}
+            
+            <div className="flex gap-3">
+                {!isLastQuestion && mode === QuizMode.EXAM && (
+                    <button
+                        onClick={handleSkip}
+                        className="px-6 py-3 rounded-xl font-semibold border border-gray-200 text-gray-600 hover:bg-gray-50 hover:text-gray-900 transition-colors"
+                    >
+                        Skip
+                    </button>
+                )}
+
+                {!isLastQuestion ? (
+                <button
+                    onClick={handleNext}
+                    className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-xl font-semibold shadow-lg shadow-blue-200 transition-transform active:scale-95 flex items-center gap-2"
+                >
+                    Next <Icons.ChevronLeft className="w-4 h-4 rotate-180" />
+                </button>
+                ) : (
+                <button
+                    onClick={handleSubmit}
+                    className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-semibold shadow-lg transition-transform active:scale-95"
+                >
+                    Submit Exam
+                </button>
+                )}
+            </div>
           </div>
       </div>
     </div>

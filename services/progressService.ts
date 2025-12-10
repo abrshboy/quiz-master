@@ -1,5 +1,5 @@
 
-import { UserProgress, SavedSession } from '../types';
+import { UserProgress, SavedSession, Activity } from '../types';
 import { supabase } from './supabaseClient';
 
 export const initialProgress: UserProgress = {
@@ -10,7 +10,9 @@ export const initialProgress: UserProgress = {
   savedSessions: {},
   streak: 0,
   lastLoginDate: new Date().toISOString(),
-  totalXp: 0
+  totalXp: 0,
+  recentActivities: [],
+  dailyChallengeLastCompleted: null
 };
 
 export const getUserProgress = async (userId: string): Promise<UserProgress> => {
@@ -36,23 +38,13 @@ export const getUserProgress = async (userId: string): Promise<UserProgress> => 
 
     if (data) {
       const progress = data.data as UserProgress;
-      
-      // Calculate Streak on Load
-      const lastLogin = new Date(progress.lastLoginDate || new Date().toISOString());
-      const today = new Date();
-      const diffTime = Math.abs(today.getTime() - lastLogin.getTime());
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-
-      let newStreak = progress.streak || 0;
-      
-      // If same day, keep streak. If 1 day diff, increment. If >1 day, reset.
-      // Logic handled in updateStreak function below, but we verify here for display
-      
       return {
+          ...initialProgress, // Ensure new fields exist if migrating old data
           ...progress,
-          // Ensure new fields exist if migrating old data
           streak: progress.streak || 0,
-          totalXp: progress.totalXp || 0
+          totalXp: progress.totalXp || 0,
+          recentActivities: progress.recentActivities || [],
+          dailyChallengeLastCompleted: progress.dailyChallengeLastCompleted || null
       };
     }
 
@@ -68,10 +60,10 @@ export const updateStreak = (progress: UserProgress): UserProgress => {
     const lastLogin = new Date(progress.lastLoginDate);
     
     // Reset hours to compare just dates
-    today.setHours(0,0,0,0);
-    lastLogin.setHours(0,0,0,0);
+    const todayDate = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+    const lastLoginDate = new Date(lastLogin.getFullYear(), lastLogin.getMonth(), lastLogin.getDate());
     
-    const diffTime = Math.abs(today.getTime() - lastLogin.getTime());
+    const diffTime = Math.abs(todayDate.getTime() - lastLoginDate.getTime());
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     
     let newStreak = progress.streak;
@@ -90,6 +82,41 @@ export const updateStreak = (progress: UserProgress): UserProgress => {
         streak: newStreak,
         lastLoginDate: new Date().toISOString()
     };
+};
+
+export const logActivity = (
+    progress: UserProgress, 
+    type: Activity['type'], 
+    description: string, 
+    xp: number
+): UserProgress => {
+    const newActivity: Activity = {
+        id: Date.now().toString(),
+        type,
+        description,
+        timestamp: new Date().toISOString(),
+        xpGained: xp
+    };
+
+    // Keep only last 20 activities
+    const updatedActivities = [newActivity, ...progress.recentActivities].slice(0, 20);
+
+    return {
+        ...progress,
+        recentActivities: updatedActivities,
+        totalXp: (progress.totalXp || 0) + xp
+    };
+};
+
+export const isDailyChallengeAvailable = (progress: UserProgress): boolean => {
+    if (!progress.dailyChallengeLastCompleted) return true;
+    
+    const lastCompleted = new Date(progress.dailyChallengeLastCompleted);
+    const today = new Date();
+    
+    return lastCompleted.getDate() !== today.getDate() || 
+           lastCompleted.getMonth() !== today.getMonth() || 
+           lastCompleted.getFullYear() !== today.getFullYear();
 };
 
 export const saveUserProgress = async (userId: string, progress: UserProgress) => {
@@ -115,11 +142,9 @@ export const saveUserProgress = async (userId: string, progress: UserProgress) =
 };
 
 export const resetUserProgress = async (userId: string): Promise<void> => {
-    // Reset by saving the initial state over the existing state
     await saveUserProgress(userId, initialProgress);
 };
 
-// Helper to update local progress object for logic before saving
 export const unlockNextYearLocal = (currentYear: number, progress: UserProgress): UserProgress => {
   const nextYear = currentYear + 1;
   if (!progress.unlockedYears.includes(nextYear)) {

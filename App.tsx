@@ -23,7 +23,8 @@ import {
   unlockNextYearLocal, 
   unlockNextPartLocal,
   initialProgress,
-  updateStreak
+  updateStreak,
+  logActivity
 } from './services/progressService';
 import { supabase } from './services/supabaseClient';
 
@@ -61,7 +62,6 @@ function App() {
 
     const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
       if (session?.user) {
-        // Only trigger login logic if we don't already have the user or if the user changed
         setUser(prev => {
           if (prev?.id !== session.user.id) {
              handleUserLogin(session.user);
@@ -90,13 +90,8 @@ function App() {
     setLoadingProgress(true);
     try {
         let loadedProgress = await getUserProgress(newUser.id);
-        
-        // Update Streak Logic
         loadedProgress = updateStreak(loadedProgress);
-        
-        // Save streak update immediately
         await saveUserProgress(newUser.id, loadedProgress);
-        
         setProgress(loadedProgress);
     } catch (e) {
         console.error("Failed to load progress", e);
@@ -149,42 +144,64 @@ function App() {
     }
   };
 
+  const handleStartDailyChallenge = () => {
+    // We use the first course as default for daily questions or random
+    setSelectedCourse(COURSES[0].id);
+    // Dummy year for compatibility, question service will ignore it for daily challenge if configured right
+    // or we fetch explicitly
+    setSelectedYear(2015); 
+    setSelectedMode(QuizMode.DAILY_CHALLENGE);
+    setView(ViewState.QUIZ);
+  };
+
   const handleQuizComplete = async (score: number, passed: boolean) => {
     setLastScore({ score, passed });
     
     let newProgress = { ...progress };
+    let xpGained = 0;
+    let activityDesc = '';
+    let activityType: any = 'PRACTICE';
 
-    // Add XP
-    const xpGained = passed ? 100 : 10;
-    newProgress.totalXp = (newProgress.totalXp || 0) + xpGained;
+    if (selectedMode === QuizMode.DAILY_CHALLENGE) {
+        xpGained = 50;
+        activityDesc = `Completed Daily Challenge`;
+        activityType = 'DAILY_CHALLENGE';
+        newProgress.dailyChallengeLastCompleted = new Date().toISOString();
+        // Daily challenge always contributes to streak if not already updated today (handled in load, but good to ensure)
+        newProgress = updateStreak(newProgress); 
 
-    if (passed && selectedYear && selectedMode) {
-      if (selectedMode === QuizMode.EXAM) {
-        // Unlock next year logic
-        newProgress = unlockNextYearLocal(selectedYear, newProgress);
-        
-        // Add to completed exams if not already there
-        if (!newProgress.completedExams.includes(selectedYear)) {
-          newProgress.completedExams = [...newProgress.completedExams, selectedYear];
+    } else if (selectedMode === QuizMode.EXAM) {
+        if (passed) {
+            xpGained = 150;
+            activityDesc = `Passed ${selectedYear} Exam`;
+            activityType = 'EXAM_PASS';
+            newProgress = unlockNextYearLocal(selectedYear!, newProgress);
+            if (!newProgress.completedExams.includes(selectedYear!)) {
+                newProgress.completedExams = [...newProgress.completedExams, selectedYear!];
+            }
+        } else {
+            xpGained = 10;
+            activityDesc = `Attempted ${selectedYear} Exam`;
+            activityType = 'EXAM_FAIL';
         }
-      } else if (selectedMode === QuizMode.PRACTICE && selectedPart) {
-        // Unlock next part logic
-        newProgress = unlockNextPartLocal(selectedYear, selectedPart, newProgress);
-        
-        // Save score
-        const scoreKey = `${selectedYear}-${selectedPart}`;
-        const currentBest = newProgress.practiceScores[scoreKey] || 0;
-        if (score > currentBest) {
-          newProgress.practiceScores[scoreKey] = score;
+    } else if (selectedMode === QuizMode.PRACTICE) {
+        xpGained = 20;
+        activityDesc = `Completed Practice Part ${selectedPart}`;
+        activityType = 'PRACTICE';
+        if (passed && selectedPart) {
+            newProgress = unlockNextPartLocal(selectedYear!, selectedPart, newProgress);
+            const scoreKey = `${selectedYear}-${selectedPart}`;
+            const currentBest = newProgress.practiceScores[scoreKey] || 0;
+            if (score > currentBest) {
+                newProgress.practiceScores[scoreKey] = score;
+            }
         }
-      }
-      
-      await handleUpdateProgress(newProgress);
-    } else {
-        // Save XP even if not passed
-        await handleUpdateProgress(newProgress);
     }
 
+    // Log the activity and add XP
+    newProgress = logActivity(newProgress, activityType, activityDesc, xpGained);
+
+    await handleUpdateProgress(newProgress);
     setView(ViewState.RESULT);
   };
 
@@ -360,25 +377,18 @@ function App() {
       
       <p className="text-gray-600 mb-8 text-lg">
         You scored <span className={`font-bold ${lastScore?.passed ? 'text-green-600' : 'text-red-500'}`}>{lastScore?.score.toFixed(1)}%</span>. 
-        {lastScore?.passed ? ' You mastered this section!' : ' You need 51% to pass.'}
       </p>
 
       <div className="space-y-4">
-        {lastScore?.passed && selectedMode === QuizMode.EXAM && (
-           <div className="bg-blue-50 text-blue-800 p-4 rounded-xl mb-6 text-sm flex items-center gap-3">
-             <div className="bg-blue-200 p-2 rounded-full"><Icons.Unlock className="w-4 h-4" /></div>
-             Next year unlocked!
-           </div>
-        )}
-        
         <button
           onClick={() => {
             if (selectedMode === QuizMode.PRACTICE) setView(ViewState.PRACTICE_LIST);
+            else if (selectedMode === QuizMode.DAILY_CHALLENGE) setView(ViewState.DASHBOARD);
             else setView(ViewState.MODE_SELECT);
           }}
           className="w-full bg-blue-600 text-white py-3.5 rounded-xl font-bold hover:bg-blue-700 transition shadow-lg shadow-blue-200"
         >
-          Try Again
+          {selectedMode === QuizMode.DAILY_CHALLENGE ? 'Finish' : 'Try Again'}
         </button>
 
          <button
@@ -409,12 +419,12 @@ function App() {
   }
 
   // Quiz View is Full Screen
-  if (view === ViewState.QUIZ && selectedCourse && selectedYear && selectedMode) {
+  if (view === ViewState.QUIZ && selectedCourse && (selectedYear || selectedMode === QuizMode.DAILY_CHALLENGE) && selectedMode) {
      return (
         <div className="min-h-screen bg-[#f8fafc]">
           <Quiz
             courseId={selectedCourse}
-            year={selectedYear}
+            year={selectedYear || 0}
             mode={selectedMode}
             part={selectedPart || undefined}
             onComplete={handleQuizComplete}
@@ -509,6 +519,7 @@ function App() {
                     progress={progress} 
                     onSelectCourse={handleCourseSelect}
                     onNavigate={(v) => setView(v)}
+                    onStartDailyChallenge={handleStartDailyChallenge}
                 />
             )}
             

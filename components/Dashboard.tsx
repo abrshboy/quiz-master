@@ -1,22 +1,29 @@
 
 import React from 'react';
-import { User, UserProgress, COURSES, ViewState } from '../types';
+import { User, UserProgress, COURSES, ViewState, QuizMode } from '../types';
 import { Icons } from './Icons';
+import { isDailyChallengeAvailable } from '../services/progressService';
 
 interface DashboardProps {
   user: User;
   progress: UserProgress;
   onSelectCourse: (courseId: string) => void;
   onNavigate: (view: ViewState) => void;
+  onStartDailyChallenge: () => void;
 }
 
-export const Dashboard: React.FC<DashboardProps> = ({ user, progress, onSelectCourse, onNavigate }) => {
+export const Dashboard: React.FC<DashboardProps> = ({ user, progress, onSelectCourse, onNavigate, onStartDailyChallenge }) => {
   const currentLevel = Math.max(...progress.unlockedYears);
+  const isDailyAvailable = isDailyChallengeAvailable(progress);
   
-  // Calculate Progress for each course (Mock calculation based on general progress)
+  // Calculate Progress for each course
   const getCourseProgress = (courseId: string) => {
-      // Logic could be more complex based on specific course data if available
       return progress.unlockedYears.length > 1 ? 25 * (progress.unlockedYears.length - 1) : 10;
+  };
+
+  const formatDate = (isoString: string) => {
+      const date = new Date(isoString);
+      return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
   };
 
   return (
@@ -73,7 +80,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, progress, onSelectCo
                         : 'bg-gray-50 border border-gray-100 opacity-70 cursor-not-allowed'
                     }`}
                     >
-                    {/* Progress Bar Background */}
                     <div className="absolute bottom-0 left-0 right-0 h-1.5 bg-gray-100">
                         <div className={`h-full transition-all duration-1000 ${course.active ? 'bg-blue-500' : 'bg-gray-300'}`} style={{ width: `${percent}%` }}></div>
                     </div>
@@ -103,20 +109,62 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, progress, onSelectCo
 
         {/* Right Column: Recent Activity & Calendar */}
         <div className="space-y-6">
+            {/* Daily Challenge Card */}
+            <div className={`rounded-3xl p-6 shadow-lg transition-all ${isDailyAvailable ? 'bg-gradient-to-br from-indigo-600 to-purple-700 text-white shadow-indigo-200' : 'bg-white border border-gray-100 text-gray-500 grayscale'}`}>
+                <div className="flex justify-between items-start">
+                    <div>
+                        <h3 className={`font-bold text-lg mb-1 ${isDailyAvailable ? 'text-white' : 'text-gray-800'}`}>Daily Challenge</h3>
+                        <p className={`text-sm mb-4 ${isDailyAvailable ? 'text-indigo-100' : 'text-gray-400'}`}>
+                            {isDailyAvailable ? 'Complete 10 questions to earn 50 XP!' : 'Come back tomorrow for new questions.'}
+                        </p>
+                    </div>
+                    <div className={`p-2 rounded-xl ${isDailyAvailable ? 'bg-white/20' : 'bg-gray-100'}`}>
+                        <Icons.Award className="w-6 h-6" />
+                    </div>
+                </div>
+                
+                {isDailyAvailable ? (
+                    <>
+                        <div className="w-full bg-white/20 h-2 rounded-full mb-4">
+                            <div className="bg-white h-full rounded-full w-0"></div>
+                        </div>
+                        <button 
+                            onClick={onStartDailyChallenge}
+                            className="w-full bg-white text-indigo-600 font-bold py-3 rounded-xl hover:bg-indigo-50 transition-colors"
+                        >
+                            Start Now
+                        </button>
+                    </>
+                ) : (
+                    <div className="flex items-center gap-2 text-green-600 font-bold bg-green-50 p-3 rounded-xl justify-center">
+                        <Icons.CheckCircle className="w-5 h-5" /> Completed
+                    </div>
+                )}
+            </div>
+
+             {/* Recent Activity */}
              <div className="bg-white rounded-3xl p-6 border border-gray-100 shadow-sm">
                 <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                     <Icons.Activity className="w-5 h-5 text-purple-500" /> Recent Activity
                 </h2>
-                {progress.completedExams.length > 0 ? (
-                    <div className="space-y-4">
-                        {progress.completedExams.slice(-3).reverse().map((year, idx) => (
+                
+                {progress.recentActivities && progress.recentActivities.length > 0 ? (
+                    <div className="space-y-4 max-h-60 overflow-y-auto pr-2 custom-scrollbar">
+                        {progress.recentActivities.slice(0, 5).map((activity, idx) => (
                              <div key={idx} className="flex items-center gap-3 p-3 rounded-xl bg-gray-50 hover:bg-gray-100 transition-colors">
-                                <div className="bg-green-100 text-green-600 p-2 rounded-full">
-                                    <Icons.CheckCircle className="w-4 h-4" />
+                                <div className={`p-2 rounded-full shrink-0 ${
+                                    activity.type === 'EXAM_PASS' ? 'bg-green-100 text-green-600' : 
+                                    (activity.type === 'EXAM_FAIL' ? 'bg-red-100 text-red-600' : 
+                                    (activity.type === 'DAILY_CHALLENGE' ? 'bg-indigo-100 text-indigo-600' : 'bg-blue-100 text-blue-600'))
+                                }`}>
+                                    {activity.type === 'EXAM_PASS' || activity.type === 'DAILY_CHALLENGE' ? <Icons.CheckCircle className="w-4 h-4" /> : <Icons.Activity className="w-4 h-4" />}
                                 </div>
-                                <div>
-                                    <div className="text-sm font-bold text-gray-800">Passed {year} Exam</div>
-                                    <div className="text-xs text-gray-500">Management Course</div>
+                                <div className="flex-1 min-w-0">
+                                    <div className="text-sm font-bold text-gray-800 truncate">{activity.description}</div>
+                                    <div className="text-xs text-gray-500 flex justify-between">
+                                        <span>+{activity.xpGained} XP</span>
+                                        <span>{formatDate(activity.timestamp)}</span>
+                                    </div>
                                 </div>
                             </div>
                         ))}
@@ -132,17 +180,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ user, progress, onSelectCo
                 >
                     View Full History
                  </button>
-            </div>
-
-            <div className="bg-gradient-to-br from-indigo-600 to-purple-700 rounded-3xl p-6 text-white shadow-lg shadow-indigo-200">
-                <h3 className="font-bold text-lg mb-2">Daily Challenge</h3>
-                <p className="text-indigo-100 text-sm mb-4">Complete one practice session today to keep your streak alive!</p>
-                <div className="w-full bg-white/20 h-2 rounded-full mb-4">
-                    <div className="bg-white h-full rounded-full w-0"></div>
-                </div>
-                <button className="w-full bg-white text-indigo-600 font-bold py-3 rounded-xl hover:bg-indigo-50 transition-colors">
-                    Start Now
-                </button>
             </div>
         </div>
 

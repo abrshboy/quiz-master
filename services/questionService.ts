@@ -1,3 +1,4 @@
+
 import { supabase } from './supabaseClient';
 import { Question, QuizMode } from '../types';
 
@@ -37,6 +38,36 @@ export const fetchQuestions = async (
     return [];
   }
 };
+
+// Fetches 10 random questions from the database (simulated randomness via client-side shuffle for now)
+export const fetchDailyChallengeQuestions = async (courseId: string): Promise<Question[]> => {
+    try {
+        // Fetch a broad set of questions (e.g., from a random year/mode to ensure we get data)
+        // Ideally, we'd use a postgres function for random(), but client-side shuffle works for smaller datasets.
+        
+        // We'll fetch from year 2015 as it's guaranteed to be there initially
+        const { data, error } = await supabase
+            .from('questions')
+            .select('content')
+            .eq('course_id', courseId)
+            .limit(50); // Get a pool to choose from
+
+        if (error) throw error;
+        
+        if (!data || data.length === 0) return [];
+
+        const allQuestions = data.map((row: any) => row.content as Question);
+        
+        // Shuffle array
+        const shuffled = allQuestions.sort(() => 0.5 - Math.random());
+        
+        // Return first 10
+        return shuffled.slice(0, 10);
+    } catch (err) {
+        console.error("Error fetching daily challenge:", err);
+        return [];
+    }
+}
 
 export const uploadQuestions = async (
   courseId: string,

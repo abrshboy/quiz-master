@@ -1,7 +1,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { QuizMode, Question, UserProgress, PASSING_SCORE } from '../types';
-import { fetchQuestions } from '../services/questionService';
+import { QuizMode, Question, UserProgress, PASSING_SCORE, DAILY_CHALLENGE_COUNT } from '../types';
+import { fetchQuestions, fetchDailyChallengeQuestions } from '../services/questionService';
 import { Icons } from './Icons';
 import { updateSessionLocal, clearSessionLocal } from '../services/progressService';
 
@@ -39,7 +39,8 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   
-  const showFeedback = mode === QuizMode.PRACTICE;
+  // Practice and Daily Challenge show immediate feedback. Exam does not.
+  const showFeedback = mode === QuizMode.PRACTICE || mode === QuizMode.DAILY_CHALLENGE;
   const sessionKey = `${courseId}-${year}-${mode}-${part || 'full'}`;
 
   // Confetti Animation Logic
@@ -95,7 +96,8 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
       setLoading(true);
       setError(null);
 
-      const saved = progress.savedSessions[sessionKey];
+      // Only load saved session if it's not a daily challenge (challenges are one-shot)
+      const saved = mode !== QuizMode.DAILY_CHALLENGE ? progress.savedSessions[sessionKey] : null;
       
       if (saved) {
         setQuestions(saved.questions);
@@ -105,18 +107,19 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
         setLoading(false);
       } else {
         try {
-          const fetchedQuestions = await fetchQuestions(
-            courseId, 
-            year, 
-            mode, 
-            part
-          );
+          let fetchedQuestions: Question[] = [];
+
+          if (mode === QuizMode.DAILY_CHALLENGE) {
+            fetchedQuestions = await fetchDailyChallengeQuestions(courseId);
+          } else {
+            fetchedQuestions = await fetchQuestions(courseId, year, mode, part);
+          }
 
           if (fetchedQuestions.length === 0) {
             setError("No questions found for this selection. Please contact the administrator.");
           } else {
             setQuestions(fetchedQuestions);
-            // Default time: 1 min per question for Practice, or custom logic
+            // Default time: 1 min per question for Practice/Daily, or custom logic
             const timePerQuestion = 60; 
             setTimeLeft(fetchedQuestions.length * timePerQuestion);
           }
@@ -153,9 +156,9 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loading, isSubmitted, questions.length]);
 
-  // Save Progress
+  // Save Progress (Only for Practice/Exam, not Daily Challenge session persistence for now)
   useEffect(() => {
-    if (!loading && questions.length > 0 && !isSubmitted) {
+    if (!loading && questions.length > 0 && !isSubmitted && mode !== QuizMode.DAILY_CHALLENGE) {
       const session = {
         currentQuestionIndex,
         answers,
@@ -185,7 +188,6 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
   };
 
   const handleSkip = () => {
-    // Just move next without forcing an answer (functionally same as next but separated for UX)
     handleNext();
   };
 
@@ -225,12 +227,14 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
     const scorePercentage = total > 0 ? (correctCount / total) * 100 : 0;
     const passed = scorePercentage >= PASSING_SCORE;
 
-    const updatedProgress = clearSessionLocal(sessionKey, progress);
-    onProgressUpdate(updatedProgress);
+    if (mode !== QuizMode.DAILY_CHALLENGE) {
+        const updatedProgress = clearSessionLocal(sessionKey, progress);
+        onProgressUpdate(updatedProgress);
+    }
     
+    // Always show confetti on passing > 50%
     if (passed) setShowConfetti(true);
 
-    // Small delay to show confetti before transitioning if needed, currently instant
     onComplete(scorePercentage, passed);
   };
 
@@ -326,7 +330,9 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
                 </button>
                 <div className="flex flex-col">
                     <div className="flex items-center gap-2">
-                        <span className="text-xs font-semibold text-gray-400 tracking-wider uppercase">Question {currentQuestionIndex + 1} of {questions.length}</span>
+                        <span className="text-xs font-semibold text-gray-400 tracking-wider uppercase">
+                            {mode === QuizMode.DAILY_CHALLENGE ? 'Daily Challenge' : `Question ${currentQuestionIndex + 1} of ${questions.length}`}
+                        </span>
                         <button onClick={() => setIsMapOpen(true)} className="text-blue-500 hover:text-blue-700 text-xs font-bold flex items-center gap-1">
                             <Icons.Grid className="w-3 h-3" /> View Map
                         </button>
@@ -456,7 +462,7 @@ const Quiz: React.FC<QuizProps> = ({ courseId, year, mode, part, onComplete, onE
                     onClick={handleSubmit}
                     className="bg-gray-900 hover:bg-black text-white px-8 py-3 rounded-xl font-semibold shadow-lg transition-transform active:scale-95"
                 >
-                    Submit Exam
+                    Submit {mode === QuizMode.DAILY_CHALLENGE ? 'Challenge' : 'Exam'}
                 </button>
                 )}
             </div>

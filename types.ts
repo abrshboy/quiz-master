@@ -21,7 +21,8 @@ export enum ViewState {
 
 export enum QuizMode {
   PRACTICE = 'practice',
-  EXAM = 'exam'
+  EXAM = 'exam',
+  DAILY_CHALLENGE = 'daily_challenge'
 }
 
 export interface Question {
@@ -31,6 +32,14 @@ export interface Question {
   correctAnswerIndex: number; // 0-3
 }
 
+export interface Activity {
+  id: string;
+  type: 'EXAM_PASS' | 'EXAM_FAIL' | 'PRACTICE' | 'DAILY_CHALLENGE';
+  description: string;
+  timestamp: string;
+  xpGained: number;
+}
+
 export interface UserProgress {
   unlockedYears: number[]; // e.g. [2015, 2016]
   unlockedPracticeParts: Record<number, number>; // Year -> MaxUnlockedPart (1-10)
@@ -38,10 +47,12 @@ export interface UserProgress {
   practiceScores: Record<string, number>; // key: "year-part", value: score
   savedSessions: Record<string, SavedSession>; // key: "year-mode-part"
   
-  // New Gamification Fields
+  // Gamification Fields
   streak: number;
   lastLoginDate: string; // ISO Date string
   totalXp: number; // Experience points based on correct answers
+  recentActivities: Activity[];
+  dailyChallengeLastCompleted: string | null; // ISO Date of last completed daily challenge
 }
 
 export interface SavedSession {
@@ -69,4 +80,5 @@ export const YEARS = [2015, 2016, 2017, 2018];
 export const PRACTICE_PARTS_COUNT = 10;
 export const PRACTICE_QUESTIONS_PER_PART = 10;
 export const EXAM_QUESTIONS_COUNT = 100; 
+export const DAILY_CHALLENGE_COUNT = 10;
 export const PASSING_SCORE = 51;
